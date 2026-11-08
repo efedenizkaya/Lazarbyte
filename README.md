@@ -696,4 +696,7 @@ and Windows.
 
 ## License
 
-MIT, same as the upstream project.
+Lazarbyte is Apache-2.0. It is a fork of
+[breadcrumb-rs](https://github.com/sltcnb/breadcrumb-rs), which is MIT; the
+upstream license text is kept in `LICENSE-MIT` and attribution is recorded in
+`NOTICE` and `THIRD_PARTY_LICENSES.md`.

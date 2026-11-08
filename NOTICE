@@ -1,0 +1,14 @@
+Lazarbyte
+Copyright 2026 The Lazarbyte Authors
+
+This product is a fork of breadcrumb-rs
+(https://github.com/sltcnb/breadcrumb-rs),
+Copyright (c) 2026 BreadCrumb contributors,
+licensed under the MIT License.
+
+The upstream MIT license text is preserved in LICENSE-MIT and reproduced in
+THIRD_PARTY_LICENSES.md. Files that came from the upstream project keep their
+original copyright notices.
+
+This product also includes third-party Rust crates; see
+THIRD_PARTY_LICENSES.md for the list, their licenses and their sources.
