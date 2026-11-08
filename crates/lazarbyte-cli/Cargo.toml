@@ -1,0 +1,20 @@
+[package]
+name = "lazarbyte-cli"
+description = "Development and parity harness for Lazarbyte; not a shipped product"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[[bin]]
+name = "bcrumb-rs"
+path = "src/main.rs"
+
+[dependencies]
+lazarbyte-core = { path = "../lazarbyte-core" }
+sha2.workspace = true
+
+[dev-dependencies]
+flate2.workspace = true
+md-5.workspace = true

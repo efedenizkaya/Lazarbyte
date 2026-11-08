@@ -5,10 +5,10 @@
 //! are enough to carve it, and getting that wrong should be a clear error
 //! rather than a scan that quietly finds nothing.
 
-use breadcrumb_rs::carver::{Carver, Options};
-use breadcrumb_rs::customsig;
-use breadcrumb_rs::jsonin::{self, Value};
-use breadcrumb_rs::reader::Source;
+use lazarbyte_core::carver::{Carver, Options};
+use lazarbyte_core::customsig;
+use lazarbyte_core::jsonin::{self, Value};
+use lazarbyte_core::reader::Source;
 
 struct Tmp(std::path::PathBuf);
 
@@ -129,7 +129,7 @@ fn a_bad_signature_file_says_what_is_wrong() {
 
 // -- carving with them -----------------------------------------------------
 
-fn carve_custom(sig_json: &[u8], image: &[u8], tag: &str) -> Vec<breadcrumb_rs::carver::Record> {
+fn carve_custom(sig_json: &[u8], image: &[u8], tag: &str) -> Vec<lazarbyte_core::carver::Record> {
     let dir = Tmp::new(tag);
     let sig_path = dir.write("sigs.json", sig_json);
     let img_path = dir.write("disk.dd", image);

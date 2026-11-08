@@ -3,8 +3,8 @@
 
 mod builders;
 
-use breadcrumb_rs::images::{SplitRawReader, StdinReader};
-use breadcrumb_rs::reader::Source;
+use lazarbyte_core::images::{SplitRawReader, StdinReader};
+use lazarbyte_core::reader::Source;
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 use std::process::Command;

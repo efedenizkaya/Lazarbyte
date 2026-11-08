@@ -7,8 +7,8 @@
 //! backwards, or cutting a file off at the end of a free run. Both are checked
 //! here against volumes the operating system's own tools made.
 
-use breadcrumb_rs::reader::Source;
 use flate2::read::GzDecoder;
+use lazarbyte_core::reader::Source;
 use std::io::Read;
 
 static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -47,18 +47,18 @@ fn fat_free_space_comes_from_the_fat_and_excludes_live_data() {
     // live file's must not.
     let (_dir, img) = unpack("fat/fat16.dd.gz", "fat");
     let src = Source::open(&img).unwrap();
-    let space = breadcrumb_rs::fat::free_ranges(&src, 0, 0).expect("free_ranges failed");
+    let space = lazarbyte_core::fat::free_ranges(&src, 0, 0).expect("free_ranges failed");
     assert!(space.free_bytes > 0 && space.free_bytes < space.volume_bytes);
 
     // Recover the live file to learn where its data sits, then check that the
     // free map does not claim it.
-    let opts = breadcrumb_rs::fat::Options {
+    let opts = lazarbyte_core::fat::Options {
         out_dir: String::new(),
         dry_run: true,
         include_live: true,
         min_size: 0,
     };
-    let (records, _kind, _cluster) = breadcrumb_rs::fat::recover(&src, 0, &opts, |_| {}).unwrap();
+    let (records, _kind, _cluster) = lazarbyte_core::fat::recover(&src, 0, &opts, |_| {}).unwrap();
     let live = records
         .iter()
         .find(|r| !r.deleted && r.name.to_lowercase().contains("kept"))
@@ -84,7 +84,7 @@ fn fat_free_space_comes_from_the_fat_and_excludes_live_data() {
 fn ext_free_space_comes_from_the_block_bitmaps() {
     let (_dir, img) = unpack("ext/ext4.img.gz", "ext");
     let src = Source::open(&img).unwrap();
-    let space = breadcrumb_rs::ext4::free_ranges(&src, 0, 0).expect("free_ranges failed");
+    let space = lazarbyte_core::ext4::free_ranges(&src, 0, 0).expect("free_ranges failed");
     // A freshly made 8 MiB volume with three small files is mostly free, but
     // the metadata (superblock, group descriptors, inode table, journal) is not.
     assert!(space.free_bytes > 0, "no free space found");
@@ -111,7 +111,7 @@ fn a_file_in_free_space_is_carved_whole_even_across_a_range_boundary() {
     )
     .unwrap();
     let src = Source::open(&img).unwrap();
-    let space = breadcrumb_rs::fat::free_ranges(&src, 0, 0).unwrap();
+    let space = lazarbyte_core::fat::free_ranges(&src, 0, 0).unwrap();
     let (_, first_end) = *space.ranges.first().expect("no free range");
 
     // Plant the PNG so that it starts inside the free range and ends past it.

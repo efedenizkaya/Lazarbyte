@@ -1,11 +1,11 @@
 //! bcrumb-rs: signature-based file carver for disk images and block devices.
 
-use breadcrumb_rs::carver::{run_parallel, run_ranges, Options, Progress, Record};
-use breadcrumb_rs::checkpoint;
-use breadcrumb_rs::json;
-use breadcrumb_rs::reader::Source;
-use breadcrumb_rs::report;
-use breadcrumb_rs::signatures::{resolve_types, Signature, SIGNATURES};
+use lazarbyte_core::carver::{run_parallel, run_ranges, Options, Progress, Record};
+use lazarbyte_core::checkpoint;
+use lazarbyte_core::json;
+use lazarbyte_core::reader::Source;
+use lazarbyte_core::report;
+use lazarbyte_core::signatures::{resolve_types, Signature, SIGNATURES};
 use std::process::ExitCode;
 use std::time::Instant;
 
@@ -201,7 +201,7 @@ fn plan_ranges(
 
 /// Read the records out of a manifest written by an earlier run.
 fn records_from_manifest(path: &std::path::Path) -> Result<Vec<Record>, String> {
-    use breadcrumb_rs::jsonin::{self, Value};
+    use lazarbyte_core::jsonin::{self, Value};
 
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let doc = jsonin::parse(&text).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -341,7 +341,7 @@ fn run() -> Result<ExitCode, String> {
     let mut html_path: Option<String> = None;
     let mut hash_source = false;
     let mut machine = false;
-    let mut creds = breadcrumb_rs::bitlocker::Credentials::default();
+    let mut creds = lazarbyte_core::bitlocker::Credentials::default();
     let mut scan_metadata = false;
     let mut hexdump: Option<(u64, usize)> = None;
     let mut export_raw: Option<String> = None;
@@ -390,7 +390,7 @@ fn run() -> Result<ExitCode, String> {
                     println!("{:<8} {}", s.name, s.description);
                 }
                 println!("\ngroups (usable in -t):");
-                for (name, members) in breadcrumb_rs::signatures::GROUPS {
+                for (name, members) in lazarbyte_core::signatures::GROUPS {
                     println!("  {:<9} {}", name, members.join(", "));
                 }
                 return Ok(ExitCode::SUCCESS);
@@ -429,7 +429,7 @@ fn run() -> Result<ExitCode, String> {
             "--sig-file" => sig_file = Some(next(&mut i)?),
             "--only-custom" => only_custom = true,
             "--from-manifest" => from_manifest = Some(next(&mut i)?),
-            "--zip-partial" => breadcrumb_rs::handlers::set_zip_partial(true),
+            "--zip-partial" => lazarbyte_core::handlers::set_zip_partial(true),
             "--validate" => opts.validate = true,
             "--drop-failed" => {
                 opts.validate = true;
@@ -462,7 +462,7 @@ fn run() -> Result<ExitCode, String> {
             "--bitlocker-recovery-key" => {
                 let key = next(&mut i)?;
                 // Fail on a malformed key here rather than after a long scan.
-                breadcrumb_rs::bitlocker::parse_recovery_password(&key)
+                lazarbyte_core::bitlocker::parse_recovery_password(&key)
                     .map_err(|e| format!("--bitlocker-recovery-key: {e}"))?;
                 creds.recovery = Some(key);
             }
@@ -543,7 +543,7 @@ fn run() -> Result<ExitCode, String> {
         None => SIGNATURES.iter().collect(),
     };
     if let Some(path) = &sig_file {
-        let custom = breadcrumb_rs::customsig::load(path)?;
+        let custom = lazarbyte_core::customsig::load(path)?;
         if !opts.quiet {
             eprintln!("loaded {} custom signature(s) from {path}", custom.len());
         }
@@ -560,16 +560,16 @@ fn run() -> Result<ExitCode, String> {
     }
 
     if deleted_times && std::path::Path::new(&source).is_dir() {
-        let events = breadcrumb_rs::artifacts::scan_tree(&source, !usn_all);
+        let events = lazarbyte_core::artifacts::scan_tree(&source, !usn_all);
         return report_deletions(events, &opts, events_path.as_deref(), machine, &[]);
     }
 
     let reader = Source::open(&source).map_err(|e| format!("{source}: {e}"))?;
 
     if dump_fve {
-        use breadcrumb_rs::bitlocker as bl;
+        use lazarbyte_core::bitlocker as bl;
         let mut bases = vec![0u64];
-        for p in breadcrumb_rs::partition::parse(&reader) {
+        for p in lazarbyte_core::partition::parse(&reader) {
             if p.start > 0 {
                 bases.push(p.start);
             }
@@ -696,20 +696,20 @@ fn run() -> Result<ExitCode, String> {
     }
 
     if list_partitions {
-        let parts = breadcrumb_rs::partition::parse(&reader);
-        println!("{}", breadcrumb_rs::partition::format_table(&parts));
+        let parts = lazarbyte_core::partition::parse(&reader);
+        println!("{}", lazarbyte_core::partition::format_table(&parts));
         return Ok(ExitCode::SUCCESS);
     }
 
     if !grep_patterns.is_empty() {
         let mut count = 0usize;
-        let query = breadcrumb_rs::grep::Query {
+        let query = lazarbyte_core::grep::Query {
             patterns: grep_patterns.clone(),
             ignore_case,
             regex: grep_regex,
             max_hits,
         };
-        breadcrumb_rs::grep::search(&reader, &query, opts.start, opts.length, |h| {
+        lazarbyte_core::grep::search(&reader, &query, opts.start, opts.length, |h| {
             count += 1;
             if machine {
                 println!(
@@ -1073,7 +1073,7 @@ fn run_from_manifest(
     let source = std::fs::read_to_string(path)
         .ok()
         .and_then(|t| {
-            breadcrumb_rs::jsonin::parse(&t)
+            lazarbyte_core::jsonin::parse(&t)
                 .ok()
                 .and_then(|d| d.get("source").and_then(|v| v.as_str()).map(str::to_string))
         })
@@ -1116,7 +1116,7 @@ fn run_fat(
     machine: bool,
     csv_path: Option<&str>,
 ) -> Result<ExitCode, String> {
-    use breadcrumb_rs::fat;
+    use lazarbyte_core::fat;
 
     let started = Instant::now();
     let quiet = opts.quiet;
@@ -1254,7 +1254,7 @@ fn run_ext4(
     machine: bool,
     csv_path: Option<&str>,
 ) -> Result<ExitCode, String> {
-    use breadcrumb_rs::ext4;
+    use lazarbyte_core::ext4;
 
     let started = Instant::now();
     let quiet = opts.quiet;
@@ -1388,7 +1388,7 @@ fn run_hfs(
     machine: bool,
     csv_path: Option<&str>,
 ) -> Result<ExitCode, String> {
-    use breadcrumb_rs::hfs;
+    use lazarbyte_core::hfs;
 
     let started = Instant::now();
     let quiet = opts.quiet;
@@ -1515,7 +1515,7 @@ fn run_apfs(
     machine: bool,
     csv_path: Option<&str>,
 ) -> Result<ExitCode, String> {
-    use breadcrumb_rs::apfs;
+    use lazarbyte_core::apfs;
 
     let started = Instant::now();
     let quiet = opts.quiet;
@@ -1668,7 +1668,7 @@ fn run_auto(
     machine: bool,
     csv_path: Option<&str>,
 ) -> Result<ExitCode, String> {
-    use breadcrumb_rs::partition;
+    use lazarbyte_core::partition;
 
     // Volumes to try: the whole image if it is one, otherwise the table.
     let mut volumes: Vec<(usize, u64, &'static str, String)> = Vec::new();
@@ -1882,7 +1882,7 @@ fn recover_one(
     index: usize,
     all: &mut Vec<AutoRecord>,
 ) -> Result<(), String> {
-    use breadcrumb_rs::{apfs, ext4, fat, hfs, ntfs};
+    use lazarbyte_core::{apfs, ext4, fat, hfs, ntfs};
 
     match fs {
         "ntfs" => {
@@ -2051,7 +2051,7 @@ fn recover_one(
 /// carves, since a stray header inside an allocated archive or installer is what
 /// produces most of them.
 fn plan_unallocated(reader: &Source, opts: &Options) -> Result<Vec<(u64, u64)>, String> {
-    use breadcrumb_rs::partition;
+    use lazarbyte_core::partition;
 
     // Adjacent free runs closer than this are merged: reading a little
     // allocated data costs less than the seek and the per-range overhead of
@@ -2101,9 +2101,9 @@ fn free_ranges_for(
     opts: &Options,
 ) -> Result<Vec<(u64, u64)>, String> {
     let space = match fs {
-        "ntfs" => breadcrumb_rs::ntfs::free_ranges(reader, base, merge_gap),
-        "fat" | "exfat" => breadcrumb_rs::fat::free_ranges(reader, base, merge_gap),
-        "ext" => breadcrumb_rs::ext4::free_ranges(reader, base, merge_gap),
+        "ntfs" => lazarbyte_core::ntfs::free_ranges(reader, base, merge_gap),
+        "fat" | "exfat" => lazarbyte_core::fat::free_ranges(reader, base, merge_gap),
+        "ext" => lazarbyte_core::ext4::free_ranges(reader, base, merge_gap),
         other => return Err(unallocated_unsupported(other)),
     }?;
     if space.ranges.is_empty() {
@@ -2289,18 +2289,18 @@ fn run_deleted_times(
     let base = ntfs_base(reader, opts)?;
     // 256 MiB per artefact: a journal is normally far smaller, and the cap
     // keeps a corrupt one from being read as gigabytes.
-    let found = breadcrumb_rs::ntfs::deletion_events(reader, base, !usn_all, 256 << 20)?;
+    let found = lazarbyte_core::ntfs::deletion_events(reader, base, !usn_all, 256 << 20)?;
     report_deletions(found.events, opts, events_path, machine, &found.sources)
 }
 
 fn report_deletions(
-    mut events: Vec<breadcrumb_rs::artifacts::DeletionEvent>,
+    mut events: Vec<lazarbyte_core::artifacts::DeletionEvent>,
     opts: &Options,
     events_path: Option<&str>,
     machine: bool,
     sources: &[(String, usize)],
 ) -> Result<ExitCode, String> {
-    use breadcrumb_rs::artifacts;
+    use lazarbyte_core::artifacts;
 
     if !opts.quiet {
         for (path, count) in sources {
@@ -2364,11 +2364,11 @@ fn report_deletions(
 /// The NTFS volume to work on: the whole image, a partition of it, or the
 /// offset the analyst gave.
 fn ntfs_base(reader: &Source, opts: &Options) -> Result<u64, String> {
-    if opts.start != 0 || breadcrumb_rs::partition::detect_fs(reader, 0) == "ntfs" {
+    if opts.start != 0 || lazarbyte_core::partition::detect_fs(reader, 0) == "ntfs" {
         return Ok(opts.start);
     }
-    let parts = breadcrumb_rs::partition::parse(reader);
-    match breadcrumb_rs::partition::largest_matching(&parts, |fs| fs == "ntfs") {
+    let parts = lazarbyte_core::partition::parse(reader);
+    match lazarbyte_core::partition::largest_matching(&parts, |fs| fs == "ntfs") {
         Some((p, count)) => {
             if !opts.quiet {
                 eprintln!(
@@ -2400,7 +2400,7 @@ fn run_ntfs(
     machine: bool,
     csv_path: Option<&str>,
 ) -> Result<ExitCode, String> {
-    use breadcrumb_rs::ntfs;
+    use lazarbyte_core::ntfs;
 
     // The volume may be the whole image, or a partition of it.
     let base = ntfs_base(reader, opts)?;
@@ -2598,7 +2598,7 @@ fn export_image(reader: &Source, path: &str, start: u64, quiet: bool) -> Result<
 
 /// Print a verification report and choose the exit code from it.
 fn verify_image(reader: &Source, quiet: bool) -> Result<ExitCode, String> {
-    use breadcrumb_rs::verify::{self, hex};
+    use lazarbyte_core::verify::{self, hex};
 
     let mut last_pct = u64::MAX;
     let outcome = verify::verify(reader, |done, total| {

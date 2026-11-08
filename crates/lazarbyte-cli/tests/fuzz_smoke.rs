@@ -9,12 +9,12 @@
 
 mod builders;
 
-use breadcrumb_rs::bitlocker;
-use breadcrumb_rs::ewf::EwfReader;
-use breadcrumb_rs::reader::Source;
-use breadcrumb_rs::signatures::SIGNATURES;
-use breadcrumb_rs::window::Window;
 use builders::Rng;
+use lazarbyte_core::bitlocker;
+use lazarbyte_core::ewf::EwfReader;
+use lazarbyte_core::reader::Source;
+use lazarbyte_core::signatures::SIGNATURES;
+use lazarbyte_core::window::Window;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -222,16 +222,16 @@ fn deletion_artefact_parsing_survives_mutated_records() {
     for _ in 0..2000 {
         let started = Instant::now();
         let r = mutate(&mut rng, &recycle);
-        if let Some(entry) = breadcrumb_rs::artifacts::parse_recycle_i(&r) {
+        if let Some(entry) = lazarbyte_core::artifacts::parse_recycle_i(&r) {
             // A path is only ever read from inside the record.
             assert!(entry.path.len() <= r.len() * 2);
         }
         let j = mutate(&mut rng, &journal);
         let mut recs = Vec::new();
-        let consumed = breadcrumb_rs::artifacts::parse_usn_journal(&j, &mut recs);
+        let consumed = lazarbyte_core::artifacts::parse_usn_journal(&j, &mut recs);
         assert!(consumed <= j.len(), "consumed past the end of the stream");
         for rec in &recs {
-            let _ = breadcrumb_rs::artifacts::describe_reasons(rec.reason);
+            let _ = lazarbyte_core::artifacts::describe_reasons(rec.reason);
             assert!(rec.name.len() <= j.len() * 2);
         }
         assert!(
@@ -274,10 +274,10 @@ fn filesystem_parsers_survive_mutated_volumes() {
             continue;
         };
         let started = Instant::now();
-        let _ = breadcrumb_rs::ntfs::recover(
+        let _ = lazarbyte_core::ntfs::recover(
             &src,
             0,
-            &breadcrumb_rs::ntfs::Options {
+            &lazarbyte_core::ntfs::Options {
                 out_dir: out.clone(),
                 dry_run: true,
                 include_live: true,
@@ -286,10 +286,10 @@ fn filesystem_parsers_survive_mutated_volumes() {
             },
             |_| {},
         );
-        let _ = breadcrumb_rs::fat::recover(
+        let _ = lazarbyte_core::fat::recover(
             &src,
             0,
-            &breadcrumb_rs::fat::Options {
+            &lazarbyte_core::fat::Options {
                 out_dir: out.clone(),
                 dry_run: true,
                 include_live: true,
@@ -297,10 +297,10 @@ fn filesystem_parsers_survive_mutated_volumes() {
             },
             |_| {},
         );
-        let _ = breadcrumb_rs::ext4::recover(
+        let _ = lazarbyte_core::ext4::recover(
             &src,
             0,
-            &breadcrumb_rs::ext4::Options {
+            &lazarbyte_core::ext4::Options {
                 out_dir: out.clone(),
                 dry_run: true,
                 include_live: true,
@@ -308,10 +308,10 @@ fn filesystem_parsers_survive_mutated_volumes() {
             },
             |_| {},
         );
-        let _ = breadcrumb_rs::hfs::recover(
+        let _ = lazarbyte_core::hfs::recover(
             &src,
             0,
-            &breadcrumb_rs::hfs::Options {
+            &lazarbyte_core::hfs::Options {
                 out_dir: out.clone(),
                 dry_run: true,
                 include_live: true,
@@ -320,17 +320,17 @@ fn filesystem_parsers_survive_mutated_volumes() {
             },
             |_| {},
         );
-        let _ = breadcrumb_rs::apfs::recover(
+        let _ = lazarbyte_core::apfs::recover(
             &src,
             0,
-            &breadcrumb_rs::apfs::Options {
+            &lazarbyte_core::apfs::Options {
                 out_dir: out.clone(),
                 dry_run: true,
                 min_size: 0,
             },
             |_| {},
         );
-        let _ = breadcrumb_rs::partition::parse(&src);
+        let _ = lazarbyte_core::partition::parse(&src);
         assert!(
             started.elapsed() < Duration::from_secs(20),
             "a filesystem parser hung on round {round}"

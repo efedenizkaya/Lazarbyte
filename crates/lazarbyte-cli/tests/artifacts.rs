@@ -14,7 +14,7 @@
 //!   USN v3: 128-bit references, so Usn @40, TimeStamp @48, Reason @56,
 //!           FileNameLength @72, FileNameOffset @74, FileName @76
 
-use breadcrumb_rs::artifacts::{
+use lazarbyte_core::artifacts::{
     self, parse_recycle_i, parse_usn_journal, UsnRecord, USN_REASON_FILE_DELETE,
 };
 
@@ -276,8 +276,8 @@ fn artefacts_are_read_from_the_volume_with_their_paths() {
     let img = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join("ntfs_artifacts.img");
-    let src = breadcrumb_rs::reader::Source::open(img.to_str().unwrap()).unwrap();
-    let found = breadcrumb_rs::ntfs::deletion_events(&src, 0, true, 1 << 20).unwrap();
+    let src = lazarbyte_core::reader::Source::open(img.to_str().unwrap()).unwrap();
+    let found = lazarbyte_core::ntfs::deletion_events(&src, 0, true, 1 << 20).unwrap();
 
     let sources: Vec<&str> = found.sources.iter().map(|(p, _)| p.as_str()).collect();
     assert!(
@@ -297,6 +297,6 @@ fn artefacts_are_read_from_the_volume_with_their_paths() {
         "a non-deletion reason leaked into the deletions"
     );
     // ...and with --usn-all, the rest of the journal comes too.
-    let all = breadcrumb_rs::ntfs::deletion_events(&src, 0, false, 1 << 20).unwrap();
+    let all = lazarbyte_core::ntfs::deletion_events(&src, 0, false, 1 << 20).unwrap();
     assert!(all.events.len() > found.events.len());
 }

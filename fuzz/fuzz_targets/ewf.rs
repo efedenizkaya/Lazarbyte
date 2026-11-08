@@ -5,7 +5,7 @@
 //! endless walk, or a read that claims to have data it does not.
 #![no_main]
 
-use breadcrumb_rs::ewf::EwfReader;
+use lazarbyte_core::ewf::EwfReader;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

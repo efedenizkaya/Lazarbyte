@@ -14,9 +14,9 @@
 //! is the only route left. What it recovers is records that survive: nodes with
 //! stale entries, journal copies, and nodes dropped from the tree.
 
-use breadcrumb_rs::hfs;
-use breadcrumb_rs::reader::Source;
 use flate2::read::GzDecoder;
+use lazarbyte_core::hfs;
+use lazarbyte_core::reader::Source;
 use std::io::Read;
 
 static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

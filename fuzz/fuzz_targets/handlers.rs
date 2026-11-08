@@ -7,9 +7,9 @@
 //! window -- the caller writes that many bytes.
 #![no_main]
 
-use breadcrumb_rs::reader::Source;
-use breadcrumb_rs::signatures::SIGNATURES;
-use breadcrumb_rs::window::Window;
+use lazarbyte_core::reader::Source;
+use lazarbyte_core::signatures::SIGNATURES;
+use lazarbyte_core::window::Window;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {

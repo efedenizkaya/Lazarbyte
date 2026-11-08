@@ -38,19 +38,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "breadcrumb-rs"
-version = "0.1.0"
-dependencies = [
- "aes",
- "aho-corasick",
- "flate2",
- "md-5",
- "regex",
- "sha1",
- "sha2",
-]
-
-[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -131,6 +118,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
 dependencies = [
  "generic-array",
+]
+
+[[package]]
+name = "lazarbyte-cli"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "lazarbyte-core",
+ "md-5",
+ "sha2",
+]
+
+[[package]]
+name = "lazarbyte-core"
+version = "0.1.0"
+dependencies = [
+ "aes",
+ "aho-corasick",
+ "flate2",
+ "md-5",
+ "regex",
+ "sha1",
+ "sha2",
 ]
 
 [[package]]

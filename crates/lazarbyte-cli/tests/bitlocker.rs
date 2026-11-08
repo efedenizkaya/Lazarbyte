@@ -4,11 +4,11 @@
 //! builder (Python) and are committed as-is, so these tests check this port
 //! against the other implementation's output rather than against itself.
 
-use breadcrumb_rs::bitlocker::{self, Credentials};
-use breadcrumb_rs::carver::{Carver, Options};
-use breadcrumb_rs::crypto::{self, Aes};
-use breadcrumb_rs::reader::Source;
-use breadcrumb_rs::signatures::SIGNATURES;
+use lazarbyte_core::bitlocker::{self, Credentials};
+use lazarbyte_core::carver::{Carver, Options};
+use lazarbyte_core::crypto::{self, Aes};
+use lazarbyte_core::reader::Source;
+use lazarbyte_core::signatures::SIGNATURES;
 use std::path::{Path, PathBuf};
 
 /// The recovery password the fixtures were built with.

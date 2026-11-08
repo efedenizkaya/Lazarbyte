@@ -1,0 +1,20 @@
+[package]
+name = "lazarbyte-core"
+description = "Carving and filesystem-undelete engine for Lazarbyte (Android)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lib]
+name = "lazarbyte_core"
+path = "src/lib.rs"
+
+[dependencies]
+aho-corasick.workspace = true
+aes.workspace = true
+flate2.workspace = true
+md-5.workspace = true
+regex.workspace = true
+sha1.workspace = true
+sha2.workspace = true

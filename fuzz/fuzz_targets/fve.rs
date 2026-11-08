@@ -5,7 +5,7 @@
 //! credential is verified, so it has to survive whatever is on the disk.
 #![no_main]
 
-use breadcrumb_rs::bitlocker::{parse_metadata, Credentials};
+use lazarbyte_core::bitlocker::{parse_metadata, Credentials};
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -20,7 +20,7 @@ fuzz_target!(|data: &[u8]| {
             ..Default::default()
         };
         // Recovery must fail cleanly on nonsense, not panic or hang.
-        let _ = breadcrumb_rs::bitlocker::recover_fvek_candidates(&meta, &creds);
-        let _ = breadcrumb_rs::bitlocker::describe_metadata(&meta, &creds);
+        let _ = lazarbyte_core::bitlocker::recover_fvek_candidates(&meta, &creds);
+        let _ = lazarbyte_core::bitlocker::describe_metadata(&meta, &creds);
     }
 });

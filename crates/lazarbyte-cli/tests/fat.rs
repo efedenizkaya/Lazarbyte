@@ -12,9 +12,9 @@
 //! (5120 bytes) were deleted, `/kept.dat` was left in place, and macOS added
 //! its own `._` sidecar files, which are ordinary files too.
 
-use breadcrumb_rs::fat;
-use breadcrumb_rs::reader::Source;
 use flate2::read::GzDecoder;
+use lazarbyte_core::fat;
+use lazarbyte_core::reader::Source;
 use std::io::Read;
 
 struct Tmp(std::path::PathBuf);

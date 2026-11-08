@@ -5,9 +5,9 @@
 //! `newfs_hfs` -- laid out behind an MBR at 1 MiB alignment, the way a real
 //! disk is partitioned. Each volume is still exactly what the OS tool wrote.
 
-use breadcrumb_rs::partition;
-use breadcrumb_rs::reader::Source;
 use flate2::read::GzDecoder;
+use lazarbyte_core::partition;
+use lazarbyte_core::reader::Source;
 use std::io::Read;
 
 const SECTOR: u64 = 512;

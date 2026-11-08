@@ -5,9 +5,9 @@
 //! campaigns run in the fuzz job; these run on every commit, so a fixed crash
 //! stays fixed even if the corpus that found it is gone.
 
-use breadcrumb_rs::reader::Source;
-use breadcrumb_rs::signatures::SIGNATURES;
-use breadcrumb_rs::window::Window;
+use lazarbyte_core::reader::Source;
+use lazarbyte_core::signatures::SIGNATURES;
+use lazarbyte_core::window::Window;
 
 #[test]
 fn known_crashing_inputs_are_still_handled() {
@@ -81,7 +81,7 @@ fn a_hostile_ewf_section_chain_does_not_walk_forever() {
     {
         let started = std::time::Instant::now();
         let path = entry.path();
-        if let Ok(r) = breadcrumb_rs::ewf::EwfReader::open(path.to_str().unwrap()) {
+        if let Ok(r) = lazarbyte_core::ewf::EwfReader::open(path.to_str().unwrap()) {
             // If it opens at all, a read must stay inside what it claims.
             let got = r.pread(0, 4096);
             assert!(got.len() as u64 <= r.size.min(4096));
@@ -122,15 +122,15 @@ fn a_boot_sector_asking_for_an_impossible_record_size_is_refused() {
     for cpr in 128u16..=255 {
         boot[64] = cpr as u8;
         std::fs::write(&img, &boot).unwrap();
-        let src = breadcrumb_rs::reader::Source::open(img.to_str().unwrap()).unwrap();
-        let opts = breadcrumb_rs::ntfs::Options {
+        let src = lazarbyte_core::reader::Source::open(img.to_str().unwrap()).unwrap();
+        let opts = lazarbyte_core::ntfs::Options {
             out_dir: dir.join("out").to_string_lossy().to_string(),
             dry_run: true,
             include_live: false,
             min_size: 0,
             only_path: None,
         };
-        let got = breadcrumb_rs::ntfs::recover(&src, 0, &opts, |_| {});
+        let got = lazarbyte_core::ntfs::recover(&src, 0, &opts, |_| {});
         if !(240..=248).contains(&cpr) {
             assert!(
                 got.is_err(),

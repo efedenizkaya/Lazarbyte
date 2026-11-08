@@ -6,8 +6,8 @@
 //! would recover its first fragment plus whatever follows, while the runlist
 //! says exactly where both pieces are.
 
-use breadcrumb_rs::ntfs;
-use breadcrumb_rs::reader::Source;
+use lazarbyte_core::ntfs;
+use lazarbyte_core::reader::Source;
 use std::path::PathBuf;
 
 fn fixture() -> PathBuf {
@@ -135,7 +135,7 @@ fn layout() -> (u64, u64, Vec<u64>) {
             .join("tests/fixtures/ntfs_deleted.layout.json"),
     )
     .expect("layout record missing");
-    let doc = breadcrumb_rs::jsonin::parse(&text).expect("layout is not JSON");
+    let doc = lazarbyte_core::jsonin::parse(&text).expect("layout is not JSON");
     let num = |k: &str| doc.get(k).and_then(|v| v.as_f64()).unwrap() as u64;
     let used = doc
         .get("used_clusters")

@@ -5,12 +5,12 @@
 
 mod builders;
 
-use breadcrumb_rs::carver::{run_parallel, Carver, Options, Record};
-use breadcrumb_rs::handlers;
-use breadcrumb_rs::reader::Source;
-use breadcrumb_rs::signatures::{resolve_types, SIGNATURES};
-use breadcrumb_rs::window::Window;
 use builders::Rng;
+use lazarbyte_core::carver::{run_parallel, Carver, Options, Record};
+use lazarbyte_core::handlers;
+use lazarbyte_core::reader::Source;
+use lazarbyte_core::signatures::{resolve_types, SIGNATURES};
+use lazarbyte_core::window::Window;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 

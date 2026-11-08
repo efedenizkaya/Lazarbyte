@@ -6,7 +6,7 @@
 //! a wrong CRC or a misplaced field, which is exactly the failure this is meant
 //! to catch.
 
-use breadcrumb_rs::validate::{self, Verdict};
+use lazarbyte_core::validate::{self, Verdict};
 
 fn fixture(name: &str) -> Vec<u8> {
     let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -180,10 +180,10 @@ fn carve_with(
     validate: bool,
     drop_failed: bool,
     tag: &str,
-) -> (Vec<breadcrumb_rs::carver::Record>, std::path::PathBuf) {
-    use breadcrumb_rs::carver::{Carver, Options};
-    use breadcrumb_rs::reader::Source;
-    use breadcrumb_rs::signatures::resolve_types;
+) -> (Vec<lazarbyte_core::carver::Record>, std::path::PathBuf) {
+    use lazarbyte_core::carver::{Carver, Options};
+    use lazarbyte_core::reader::Source;
+    use lazarbyte_core::signatures::resolve_types;
 
     let good = fixture("valid.docx");
     let mut broken = fixture("valid.docx");
@@ -219,9 +219,9 @@ fn carve_with(
 #[test]
 fn validation_separates_an_intact_document_from_a_damaged_one() {
     let (records, dir) = carve_with(true, false, "keep");
-    let verified: Vec<&breadcrumb_rs::carver::Record> =
+    let verified: Vec<&lazarbyte_core::carver::Record> =
         records.iter().filter(|r| r.decoded == Some(true)).collect();
-    let failed: Vec<&breadcrumb_rs::carver::Record> = records
+    let failed: Vec<&lazarbyte_core::carver::Record> = records
         .iter()
         .filter(|r| r.decoded == Some(false))
         .collect();

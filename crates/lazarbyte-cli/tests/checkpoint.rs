@@ -2,10 +2,10 @@
 
 mod builders;
 
-use breadcrumb_rs::carver::{run_parallel, run_ranges, Options};
-use breadcrumb_rs::checkpoint::{Checkpoint, Fingerprint};
-use breadcrumb_rs::reader::Source;
-use breadcrumb_rs::signatures::SIGNATURES;
+use lazarbyte_core::carver::{run_parallel, run_ranges, Options};
+use lazarbyte_core::checkpoint::{Checkpoint, Fingerprint};
+use lazarbyte_core::reader::Source;
+use lazarbyte_core::signatures::SIGNATURES;
 use std::path::PathBuf;
 
 struct Tmp(PathBuf);
@@ -113,7 +113,7 @@ fn a_resumed_scan_finds_what_one_pass_finds() {
     std::fs::write(&path, &img).unwrap();
     let reader = Source::open(path.to_str().unwrap()).unwrap();
     let sigs: Vec<_> = SIGNATURES.iter().collect();
-    let key = |rs: &[breadcrumb_rs::carver::Record]| {
+    let key = |rs: &[lazarbyte_core::carver::Record]| {
         let mut v: Vec<(u64, u64, String)> = rs
             .iter()
             .map(|r| (r.offset, r.size, r.sha256.clone()))
@@ -198,7 +198,7 @@ fn a_killed_scan_still_leaves_a_record_of_what_it_found() {
     // Every line stands on its own, so a file truncated mid-write still parses
     // up to the last complete record.
     for line in &lines {
-        let v = breadcrumb_rs::jsonin::parse(line).expect("a streamed line is not JSON");
+        let v = lazarbyte_core::jsonin::parse(line).expect("a streamed line is not JSON");
         assert!(v
             .get("sha256")
             .and_then(|s| s.as_str())
@@ -207,7 +207,7 @@ fn a_killed_scan_still_leaves_a_record_of_what_it_found() {
     }
     // ...and it agrees with the manifest the finished run wrote.
     let manifest = std::fs::read_to_string(out.join("manifest.json")).unwrap();
-    let doc = breadcrumb_rs::jsonin::parse(&manifest).unwrap();
+    let doc = lazarbyte_core::jsonin::parse(&manifest).unwrap();
     let files = doc.get("files").and_then(|f| f.as_array()).unwrap();
     assert_eq!(
         files.len(),

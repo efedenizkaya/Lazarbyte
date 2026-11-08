@@ -6,7 +6,7 @@
 //! be talked into an enormous allocation by a declared length.
 #![no_main]
 
-use breadcrumb_rs::reader::Source;
+use lazarbyte_core::reader::Source;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -28,10 +28,10 @@ fuzz_target!(|data: &[u8]| {
 
     // dry_run everywhere: the parsers are what is being exercised, and a fuzz
     // run should not be writing recovered files to the disk.
-    let _ = breadcrumb_rs::ntfs::recover(
+    let _ = lazarbyte_core::ntfs::recover(
         &src,
         0,
-        &breadcrumb_rs::ntfs::Options {
+        &lazarbyte_core::ntfs::Options {
             out_dir: out.to_string_lossy().to_string(),
             dry_run: true,
             include_live: true,
@@ -40,10 +40,10 @@ fuzz_target!(|data: &[u8]| {
         },
         |_| {},
     );
-    let _ = breadcrumb_rs::fat::recover(
+    let _ = lazarbyte_core::fat::recover(
         &src,
         0,
-        &breadcrumb_rs::fat::Options {
+        &lazarbyte_core::fat::Options {
             out_dir: out.to_string_lossy().to_string(),
             dry_run: true,
             include_live: true,
@@ -51,10 +51,10 @@ fuzz_target!(|data: &[u8]| {
         },
         |_| {},
     );
-    let _ = breadcrumb_rs::ext4::recover(
+    let _ = lazarbyte_core::ext4::recover(
         &src,
         0,
-        &breadcrumb_rs::ext4::Options {
+        &lazarbyte_core::ext4::Options {
             out_dir: out.to_string_lossy().to_string(),
             dry_run: true,
             include_live: true,
@@ -62,10 +62,10 @@ fuzz_target!(|data: &[u8]| {
         },
         |_| {},
     );
-    let _ = breadcrumb_rs::hfs::recover(
+    let _ = lazarbyte_core::hfs::recover(
         &src,
         0,
-        &breadcrumb_rs::hfs::Options {
+        &lazarbyte_core::hfs::Options {
             out_dir: out.to_string_lossy().to_string(),
             dry_run: true,
             include_live: true,
@@ -74,16 +74,16 @@ fuzz_target!(|data: &[u8]| {
         },
         |_| {},
     );
-    let _ = breadcrumb_rs::apfs::recover(
+    let _ = lazarbyte_core::apfs::recover(
         &src,
         0,
-        &breadcrumb_rs::apfs::Options {
+        &lazarbyte_core::apfs::Options {
             out_dir: out.to_string_lossy().to_string(),
             dry_run: true,
             min_size: 0,
         },
         |_| {},
     );
-    let _ = breadcrumb_rs::partition::parse(&src);
+    let _ = lazarbyte_core::partition::parse(&src);
     let _ = std::fs::remove_file(&path);
 });

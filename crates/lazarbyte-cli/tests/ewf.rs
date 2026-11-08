@@ -4,10 +4,10 @@
 
 mod builders;
 
-use breadcrumb_rs::carver::{Carver, Options};
-use breadcrumb_rs::ewf::{segment_names, EwfReader};
-use breadcrumb_rs::reader::Source;
-use breadcrumb_rs::signatures::SIGNATURES;
+use lazarbyte_core::carver::{Carver, Options};
+use lazarbyte_core::ewf::{segment_names, EwfReader};
+use lazarbyte_core::reader::Source;
+use lazarbyte_core::signatures::SIGNATURES;
 use std::path::{Path, PathBuf};
 
 struct Tmp(PathBuf);
@@ -252,7 +252,7 @@ fn verify_matches_the_hashes_the_acquisition_recorded() {
         "no stored SHA-1 (acquired with -d sha1)"
     );
 
-    let outcome = breadcrumb_rs::verify::verify(&src, |_, _| {}).expect("verify failed");
+    let outcome = lazarbyte_core::verify::verify(&src, |_, _| {}).expect("verify failed");
     assert_eq!(outcome.bytes, data.len() as u64);
     assert_eq!(
         outcome.matches(),
@@ -308,7 +308,7 @@ fn verify_catches_a_modified_image() {
     let src = Source::open(path.to_str().unwrap()).unwrap();
     // A flip inside a table or header can make the image unreadable, which is
     // also a detection -- just a louder one.
-    if let Ok(outcome) = breadcrumb_rs::verify::verify(&src, |_, _| {}) {
+    if let Ok(outcome) = lazarbyte_core::verify::verify(&src, |_, _| {}) {
         assert_eq!(
             outcome.matches(),
             Some(false),
@@ -323,6 +323,6 @@ fn a_raw_image_has_nothing_to_verify_against() {
     let path = dir.join("plain.dd");
     std::fs::write(&path, [0x41u8; 4096]).unwrap();
     let src = Source::open(path.to_str().unwrap()).unwrap();
-    let outcome = breadcrumb_rs::verify::verify(&src, |_, _| {}).unwrap();
+    let outcome = lazarbyte_core::verify::verify(&src, |_, _| {}).unwrap();
     assert_eq!(outcome.matches(), None);
 }

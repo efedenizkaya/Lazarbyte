@@ -1,23 +1,15 @@
-[package]
-name = "breadcrumb-rs"
+[workspace]
+resolver = "2"
+members = ["crates/lazarbyte-core", "crates/lazarbyte-cli"]
+exclude = ["fuzz"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.74"
-description = "Signature-based file carver and filesystem-undelete tool for disk images and block devices (NTFS, FAT/exFAT, ext2/3/4, HFS+, APFS; EWF and BitLocker native)"
 license = "Apache-2.0"
-repository = "https://github.com/sltcnb/breadcrumb-rs"
-keywords = ["forensics", "file-carving", "data-recovery", "disk-image", "undelete"]
-categories = ["command-line-utilities"]
 
-[lib]
-name = "breadcrumb_rs"
-path = "src/lib.rs"
-
-[[bin]]
-name = "bcrumb-rs"
-path = "src/main.rs"
-
-[dependencies]
+[workspace.dependencies]
 # The whole point of the port: SIMD-accelerated multi-pattern search.
 aho-corasick = "1.1"
 sha2 = "0.10"
@@ -43,9 +35,3 @@ opt-level = 3
 lto = true
 codegen-units = 1
 panic = "abort"
-
-[dev-dependencies]
-md-5 = "0.10"
-# Test fixtures are real filesystem images, stored gzipped: most of a volume is
-# zeros, and the repository should not carry tens of megabytes of them.
-flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }

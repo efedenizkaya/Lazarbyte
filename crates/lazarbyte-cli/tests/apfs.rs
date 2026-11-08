@@ -10,9 +10,9 @@
 //! `/kept.dat` was left in place. macOS's own `fseventsd` files are on the
 //! volume too, and are real files.
 
-use breadcrumb_rs::apfs;
-use breadcrumb_rs::reader::Source;
 use flate2::read::GzDecoder;
+use lazarbyte_core::apfs;
+use lazarbyte_core::reader::Source;
 use std::io::Read;
 
 static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

@@ -2,9 +2,9 @@
 
 mod builders;
 
-use breadcrumb_rs::carver::{Options, Record};
-use breadcrumb_rs::reader::Source;
-use breadcrumb_rs::{grep, partition, report};
+use lazarbyte_core::carver::{Options, Record};
+use lazarbyte_core::reader::Source;
+use lazarbyte_core::{grep, partition, report};
 use std::path::PathBuf;
 
 struct Tmp(PathBuf);
