@@ -1,0 +1,72 @@
+# cargo-deny configuration for Lazarbyte.
+#
+# Policy source: AGENTS.md §2 (licensing) and §3 (no C toolchain, no network).
+# Run with `cargo deny check` after every dependency change.
+
+[graph]
+# Check every target: development happens on Windows, CI on Linux, the product
+# on Android. A target-specific dependency must not slip past the license gate.
+targets = []
+
+[advisories]
+# RustSec advisories fail the build. Ignore an advisory only with a written
+# reason and an expiry note in THIRD_PARTY_LICENSES.md.
+ignore = []
+
+[licenses]
+# Project allow-list: permissive licenses only. MPL-2.0 is handled below as a
+# scoped exception for the uniffi family.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.8
+# The allow-list is a standing policy list, not a snapshot of today's graph:
+# a permissive license that no current crate uses is still acceptable.
+unused-allowed-license = "allow"
+
+# MPL-2.0 exception, approved by the project owner (AGENTS.md §2). It applies
+# only to unmodified uniffi crates used as dependencies; uniffi sources are
+# never vendored, patched or modified. MPL-2.0 is file-level weak copyleft, so
+# depending on it does not relicense Lazarbyte.
+#
+# uniffi is introduced in Faz 4. Any additional MPL-2.0 crate that uniffi pulls
+# in transitively must be listed here with a comment naming its parent before
+# it enters the dependency tree.
+#
+# cargo-deny warns that these entries are "not encountered" until Faz 4 adds
+# the dependency. That is expected and harmless: the exception is already in
+# force, so an accidental MPL-2.0 crate elsewhere still fails the check.
+exceptions = [
+    { crate = "uniffi", allow = ["MPL-2.0"] },
+    { crate = "uniffi_core", allow = ["MPL-2.0"] },
+    { crate = "uniffi_macros", allow = ["MPL-2.0"] },
+    { crate = "uniffi_meta", allow = ["MPL-2.0"] },
+    { crate = "uniffi_udl", allow = ["MPL-2.0"] },
+    { crate = "uniffi_build", allow = ["MPL-2.0"] },
+    { crate = "uniffi_bindgen", allow = ["MPL-2.0"] },
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "allow"
+# The core must stay pure Rust: a C toolchain is not available in the Android
+# build and the project does not want one. TLS/OpenSSL crates also imply
+# network use, which the product forbids.
+deny = [
+    { crate = "openssl", reason = "requires a C toolchain and is not needed for an offline app" },
+    { crate = "openssl-sys", reason = "requires a C toolchain and is not needed for an offline app" },
+    { crate = "native-tls", reason = "pulls in a platform TLS stack; Lazarbyte never uses the network" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

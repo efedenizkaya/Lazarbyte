@@ -74,6 +74,16 @@ Full license texts for these crates are shipped inside the crates themselves
 third-party notices before any Play Store release; that is a Faz 8 task, not
 done yet.
 
+## Enforcement
+
+`deny.toml` makes [cargo-deny](https://github.com/embarkstudios/cargo-deny)
+enforce this file's rules: the permissive allow-list above, the scoped
+uniffi MPL-2.0 exception, crates.io as the only allowed source, and a ban on
+OpenSSL/native-tls so the core stays pure Rust and offline. Run
+`cargo deny check` after every dependency change. Until Faz 4 adds uniffi,
+cargo-deny reports the uniffi exceptions as "not encountered"; that warning is
+expected.
+
 ## Planned: uniffi (Faz 4)
 
 The Android/Kotlin bridge will use the [uniffi-rs](https://github.com/mozilla/uniffi-rs)
