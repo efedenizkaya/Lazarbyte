@@ -47,7 +47,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "breadcrumb-rs"
+name = "lazarbyte-core"
 version = "0.1.0"
 dependencies = [
  "aes",
@@ -60,11 +60,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "breadcrumb-rs-fuzz"
+name = "lazarbyte-fuzz"
 version = "0.0.0"
 dependencies = [
  "arbitrary",
- "breadcrumb-rs",
+ "lazarbyte-core",
  "libfuzzer-sys",
 ]
 

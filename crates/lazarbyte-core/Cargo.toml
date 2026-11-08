@@ -5,6 +5,10 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+# Distributed as part of the Android app, never through crates.io. Packaging it
+# alone would also drop the root LICENSE-MIT/NOTICE that the MIT-derived
+# sources require.
+publish = false
 
 [lib]
 name = "lazarbyte_core"

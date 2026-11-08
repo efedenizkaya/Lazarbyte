@@ -74,6 +74,24 @@ Full license texts for these crates are shipped inside the crates themselves
 third-party notices before any Play Store release; that is a Faz 8 task, not
 done yet.
 
+## Fuzz-only development crates
+
+`fuzz/` is a workspace of its own, used only by `cargo fuzz`. Nothing in it is
+linked into the CLI or the Android app, and none of it is distributed. CI keeps
+its lockfile consistent (`cargo metadata --locked`), but the crates are outside
+`cargo deny check` because two of them use licenses that are permissive yet not
+on the project allow-list:
+
+| Crate | Version | License | Source |
+| --- | --- | --- | --- |
+| libfuzzer-sys | 0.4.13 | (MIT OR Apache-2.0) AND NCSA | https://github.com/rust-fuzz/libfuzzer |
+| arbitrary | 1.4.2 | (MIT OR Apache-2.0) AND Unicode-3.0 | https://github.com/rust-fuzz/arbitrary |
+| derive_arbitrary | 1.4.2 | (MIT OR Apache-2.0) AND Unicode-3.0 | https://github.com/rust-fuzz/arbitrary |
+
+Both NCSA and Unicode-3.0 are OSI-approved and permissive. Bringing the fuzz
+workspace under the same `cargo deny` gate therefore needs the project owner's
+explicit approval; until then this is recorded rather than silently allowed.
+
 ## Enforcement
 
 `deny.toml` makes [cargo-deny](https://github.com/embarkstudios/cargo-deny)

@@ -7,6 +7,9 @@
 # Check every target: development happens on Windows, CI on Linux, the product
 # on Android. A target-specific dependency must not slip past the license gate.
 targets = []
+# Resolve optional dependencies too, so a crate behind a non-default feature is
+# still license-, ban- and advisory-checked (Faz 2 introduces feature flags).
+all-features = true
 
 [advisories]
 # RustSec advisories fail the build. Ignore an advisory only with a written
