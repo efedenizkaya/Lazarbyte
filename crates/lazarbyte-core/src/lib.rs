@@ -5,6 +5,10 @@
 //! its true end, and write the recovered bytes out with a SHA-256 manifest.
 //! No filesystem metadata is needed or consulted.
 
+// The core crate handles untrusted image bytes. It must stay free of unsafe
+// code; any FFI or raw file-descriptor work belongs in lazarbyte-ffi instead.
+#![forbid(unsafe_code)]
+
 pub mod apfs;
 pub mod artifacts;
 pub mod bitlocker;
