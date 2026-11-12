@@ -771,7 +771,7 @@ pub fn free_ranges(
     src: &Source,
     offset: u64,
     merge_gap: u64,
-) -> Result<crate::ntfs::FreeSpace, String> {
+) -> Result<crate::freespace::FreeSpace, String> {
     let vol = locate(src, offset)?;
     if vol.cluster_count == 0 {
         return Err("FAT volume reports no clusters".into());
@@ -841,14 +841,14 @@ pub fn free_ranges(
     // there rather than from the start of the volume.
     let data_start = vol.cluster_offset(2);
     let volume_end = vol.base.saturating_add(vol.volume_size);
-    let (ranges, free_bytes) = crate::ntfs::ranges_from_free_clusters(
+    let (ranges, free_bytes) = crate::freespace::ranges_from_free_clusters(
         runs.into_iter(),
         data_start,
         vol.cluster_size,
         volume_end,
         merge_gap,
     );
-    Ok(crate::ntfs::FreeSpace {
+    Ok(crate::freespace::FreeSpace {
         ranges,
         free_bytes,
         volume_bytes: vol.volume_size,

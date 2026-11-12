@@ -680,7 +680,7 @@ pub fn free_ranges(
     src: &Source,
     offset: u64,
     merge_gap: u64,
-) -> Result<crate::ntfs::FreeSpace, String> {
+) -> Result<crate::freespace::FreeSpace, String> {
     let vol = locate(src, offset)?;
     if vol.bitmaps.is_empty() || vol.blocks_per_group == 0 {
         return Err("ext volume has no block bitmaps".into());
@@ -721,14 +721,14 @@ pub fn free_ranges(
         runs.push((s, vol.blocks_count.saturating_sub(s)));
     }
     let volume_bytes = vol.blocks_count.saturating_mul(vol.block_size);
-    let (ranges, free_bytes) = crate::ntfs::ranges_from_free_clusters(
+    let (ranges, free_bytes) = crate::freespace::ranges_from_free_clusters(
         runs.into_iter(),
         vol.base,
         vol.block_size,
         vol.base.saturating_add(volume_bytes),
         merge_gap,
     );
-    Ok(crate::ntfs::FreeSpace {
+    Ok(crate::freespace::FreeSpace {
         ranges,
         free_bytes,
         volume_bytes,

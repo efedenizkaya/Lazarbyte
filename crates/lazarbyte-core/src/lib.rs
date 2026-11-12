@@ -19,6 +19,7 @@ pub mod customsig;
 pub mod ewf;
 pub mod ext4;
 pub mod fat;
+pub mod freespace;
 pub mod grep;
 pub mod handlers;
 pub mod hfs;
