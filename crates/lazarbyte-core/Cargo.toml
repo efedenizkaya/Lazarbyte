@@ -16,9 +16,35 @@ path = "src/lib.rs"
 
 [dependencies]
 aho-corasick.workspace = true
-aes.workspace = true
+aes = { workspace = true, optional = true }
 flate2.workspace = true
 md-5.workspace = true
-regex.workspace = true
+regex = { workspace = true, optional = true }
 sha1.workspace = true
 sha2.workspace = true
+
+[features]
+# The desktop CLI and the test suite build everything. The Android build uses
+# `--no-default-features`: carving plus FAT/exFAT and ext, which is the scope
+# the mobile app promises, and nothing else. Each flag below only removes code
+# and its dependencies; no behavior changes when it is on.
+default = ["ntfs", "hfs", "apfs", "ewf", "bitlocker", "containers", "grep", "customsig"]
+# NTFS undelete; pulls in the MFT/$Bitmap reader and the artifacts both use.
+ntfs = ["artifacts"]
+# NTFS deletion artifacts ($Recycle.Bin, $UsnJrnl) as a report of their own.
+artifacts = []
+hfs = []
+apfs = []
+# EWF/E01 evidence images.
+ewf = []
+# BitLocker volumes.
+bitlocker = ["dep:aes"]
+# QCOW2, VMDK, split raw and stdin containers. Mobile sources are file
+# descriptors handed over by the picker, so the app does not need any of them.
+containers = []
+# --grep, and with it the regex crate (roughly a quarter of the binary).
+grep = ["dep:regex"]
+# --sig-file: signatures defined at run time.
+customsig = ["jsonin"]
+jsonin = []
+

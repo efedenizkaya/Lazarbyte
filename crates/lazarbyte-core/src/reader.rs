@@ -54,16 +54,30 @@ fn looks_like_ewf(path: &str, head: &[u8]) -> bool {
     head.starts_with(EWF_MAGIC) || EWF_EXTS.iter().any(|e| lower.ends_with(e))
 }
 
+/// Error for a container this build was compiled without support for.
+#[cfg(any(not(feature = "containers"), not(feature = "ewf")))]
+fn unsupported(what: &str) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::Unsupported,
+        format!(
+            "{what} are not supported by this build; convert the image to raw \
+             first, for example with: qemu-img convert -O raw <in> <out.dd>"
+        ),
+    )
+}
+
 /// A pass-through source that decrypts BitLocker volume regions in place.
 ///
 /// Absolute offsets are preserved: a locked volume at byte `base` reads back as
 /// its plaintext NTFS, so partition parsing and --offset keep working. Bytes
 /// outside any unlocked volume pass through verbatim.
+#[cfg(feature = "bitlocker")]
 pub struct BitLockerDecrypting {
     inner: Box<Source>,
     volumes: Vec<crate::bitlocker::Volume>,
 }
 
+#[cfg(feature = "bitlocker")]
 impl BitLockerDecrypting {
     pub fn size(&self) -> u64 {
         self.inner.size()
@@ -118,22 +132,32 @@ impl BitLockerDecrypting {
 /// The image behind a scan.
 pub enum Source {
     Raw(Reader),
+    #[cfg(feature = "ewf")]
     Ewf(crate::ewf::EwfReader),
+    #[cfg(feature = "containers")]
     Split(crate::images::SplitRawReader),
+    #[cfg(feature = "containers")]
     Qcow2(crate::images::Qcow2Reader),
+    #[cfg(feature = "containers")]
     Vmdk(crate::images::VmdkReader),
+    #[cfg(feature = "containers")]
     Stdin(crate::images::StdinReader),
+    #[cfg(feature = "bitlocker")]
     BitLocker(BitLockerDecrypting),
 }
 
 impl Source {
     pub fn open(path: &str) -> io::Result<Self> {
         if path == "-" || path == "/dev/stdin" {
+            #[cfg(feature = "containers")]
             return Ok(Source::Stdin(crate::images::StdinReader::spool(
                 io::stdin(),
             )?));
+            #[cfg(not(feature = "containers"))]
+            return Err(unsupported("reading the image from stdin"));
         }
         // A numbered segment with a sibling behind it is a split raw image.
+        #[cfg(feature = "containers")]
         if let Some((stem, digits)) = crate::images::split_segment_name(path) {
             let width = digits.len();
             let n: u64 = digits.parse().unwrap_or(0);
@@ -150,10 +174,16 @@ impl Source {
         drop(file);
         let head = &head[..n];
         if head.starts_with(b"QFI\xfb") {
+            #[cfg(feature = "containers")]
             return Ok(Source::Qcow2(crate::images::Qcow2Reader::open(path)?));
+            #[cfg(not(feature = "containers"))]
+            return Err(unsupported("QCOW2 images"));
         }
         if head.starts_with(b"KDMV") {
+            #[cfg(feature = "containers")]
             return Ok(Source::Vmdk(crate::images::VmdkReader::open(path)?));
+            #[cfg(not(feature = "containers"))]
+            return Err(unsupported("VMDK images"));
         }
         if let Some(kind) = container_kind(path, head) {
             return Err(io::Error::new(
@@ -167,7 +197,10 @@ impl Source {
             ));
         }
         if looks_like_ewf(path, head) {
+            #[cfg(feature = "ewf")]
             return Ok(Source::Ewf(crate::ewf::EwfReader::open(path)?));
+            #[cfg(not(feature = "ewf"))]
+            return Err(unsupported("EWF/E01 images"));
         }
         Ok(Source::Raw(Reader::open(path)?))
     }
@@ -175,11 +208,17 @@ impl Source {
     pub fn size(&self) -> u64 {
         match self {
             Source::Raw(r) => r.size,
+            #[cfg(feature = "ewf")]
             Source::Ewf(e) => e.size,
+            #[cfg(feature = "containers")]
             Source::Split(s) => s.size,
+            #[cfg(feature = "containers")]
             Source::Qcow2(q) => q.size,
+            #[cfg(feature = "containers")]
             Source::Vmdk(v) => v.size,
+            #[cfg(feature = "containers")]
             Source::Stdin(s) => s.size,
+            #[cfg(feature = "bitlocker")]
             Source::BitLocker(b) => b.size(),
         }
     }
@@ -187,11 +226,17 @@ impl Source {
     pub fn pread(&self, offset: u64, len: usize) -> Vec<u8> {
         match self {
             Source::Raw(r) => r.pread(offset, len),
+            #[cfg(feature = "ewf")]
             Source::Ewf(e) => e.pread(offset, len),
+            #[cfg(feature = "containers")]
             Source::Split(s) => s.pread(offset, len),
+            #[cfg(feature = "containers")]
             Source::Qcow2(q) => q.pread(offset, len),
+            #[cfg(feature = "containers")]
             Source::Vmdk(v) => v.pread(offset, len),
+            #[cfg(feature = "containers")]
             Source::Stdin(s) => s.pread(offset, len),
+            #[cfg(feature = "bitlocker")]
             Source::BitLocker(b) => b.pread(offset, len),
         }
     }
@@ -199,11 +244,17 @@ impl Source {
     pub fn path(&self) -> &str {
         match self {
             Source::Raw(r) => &r.path,
+            #[cfg(feature = "ewf")]
             Source::Ewf(e) => &e.path,
+            #[cfg(feature = "containers")]
             Source::Split(s) => &s.path,
+            #[cfg(feature = "containers")]
             Source::Qcow2(q) => &q.path,
+            #[cfg(feature = "containers")]
             Source::Vmdk(v) => &v.path,
+            #[cfg(feature = "containers")]
             Source::Stdin(s) => &s.path,
+            #[cfg(feature = "bitlocker")]
             Source::BitLocker(b) => b.inner.path(),
         }
     }
@@ -213,6 +264,7 @@ impl Source {
     ///
     /// Every FVE volume found -- the whole source, or each partition of it --
     /// is unlocked with the given credential. Returns the number unlocked.
+    #[cfg(feature = "bitlocker")]
     pub fn unlock_bitlocker(
         self,
         creds: &crate::bitlocker::Credentials,
@@ -257,9 +309,11 @@ impl Source {
     }
 
     /// Hashes the acquisition recorded in the image, if the format keeps any.
+    #[cfg(feature = "ewf")]
     pub fn stored_hashes(&self) -> crate::ewf::StoredHashes {
         match self {
             Source::Ewf(e) => e.stored_hashes.clone(),
+            #[cfg(feature = "bitlocker")]
             Source::BitLocker(b) => b.inner.stored_hashes(),
             _ => Default::default(),
         }
@@ -283,11 +337,17 @@ impl Source {
         match self {
             Source::Raw(r) if r.is_device => vec!["device".into()],
             Source::Raw(_) => Vec::new(),
+            #[cfg(feature = "ewf")]
             Source::Ewf(e) => vec![format!("EWF, {} segments", e.segment_count())],
+            #[cfg(feature = "containers")]
             Source::Split(s) => vec![format!("split raw, {} segments", s.count)],
+            #[cfg(feature = "containers")]
             Source::Qcow2(_) => vec!["QCOW2".into()],
+            #[cfg(feature = "containers")]
             Source::Vmdk(_) => vec!["VMDK sparse".into()],
+            #[cfg(feature = "containers")]
             Source::Stdin(_) => vec!["spooled from stdin".into()],
+            #[cfg(feature = "bitlocker")]
             Source::BitLocker(b) => {
                 let mut parts = b.inner.describe_parts();
                 parts.push("BitLocker unlocked".into());

@@ -14,6 +14,8 @@ const GB: u64 = 1 << 30;
 /// `--sig-file` that only exists at run time.
 pub enum Handler {
     Fn(fn(&mut Window) -> Option<Carve>),
+    /// A footer rule from `--sig-file`, which only exists at run time.
+    #[cfg(feature = "customsig")]
     Footer(crate::customsig::Spec),
 }
 pub type Precheck = fn(&[u8], usize) -> bool;
@@ -33,6 +35,7 @@ impl Signature {
     pub fn carve(&self, w: &mut Window) -> Option<Carve> {
         match &self.handler {
             Handler::Fn(f) => f(w),
+            #[cfg(feature = "customsig")]
             Handler::Footer(spec) => {
                 let unbounded = Carve {
                     size: w.limit,

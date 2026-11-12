@@ -41,9 +41,22 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// The acquisition hashes recorded in the image, if the format keeps any.
+#[cfg(feature = "ewf")]
+fn stored_hashes(src: &Source) -> (Option<[u8; 16]>, Option<[u8; 20]>) {
+    let s = src.stored_hashes();
+    (s.md5, s.sha1)
+}
+
+/// Raw images record no hashes of their own.
+#[cfg(not(feature = "ewf"))]
+fn stored_hashes(_src: &Source) -> (Option<[u8; 16]>, Option<[u8; 20]>) {
+    (None, None)
+}
+
 /// Hash every byte of the source, reporting progress through `on_progress`.
 pub fn verify(src: &Source, mut on_progress: impl FnMut(u64, u64)) -> Result<Outcome, String> {
-    let stored = src.stored_hashes();
+    let (stored_md5, stored_sha1) = stored_hashes(src);
     let mut md5 = Md5::new();
     let mut sha1 = Sha1::new();
     let mut sha256 = Sha256::new();
@@ -68,7 +81,7 @@ pub fn verify(src: &Source, mut on_progress: impl FnMut(u64, u64)) -> Result<Out
         md5: md5.finalize().into(),
         sha1: sha1.finalize().into(),
         sha256: sha256.finalize().into(),
-        stored_md5: stored.md5,
-        stored_sha1: stored.sha1,
+        stored_md5,
+        stored_sha1,
     })
 }
