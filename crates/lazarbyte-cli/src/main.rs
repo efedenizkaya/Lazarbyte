@@ -335,6 +335,16 @@ fn main() -> ExitCode {
     }
 }
 
+/// A read error leaves the output partial; no mode may report success after it.
+fn check_read_errors(reader: &Source) -> Result<(), String> {
+    match reader.take_read_error() {
+        Some(e) => Err(format!(
+            "{e}; the recovery stopped there and its output is partial"
+        )),
+        None => Ok(()),
+    }
+}
+
 fn run() -> Result<ExitCode, String> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut opts = Options::default();
@@ -745,6 +755,7 @@ fn run() -> Result<ExitCode, String> {
         if !opts.quiet && !machine {
             eprintln!("\n{count} hit(s)");
         }
+        check_read_errors(&reader)?;
         return Ok(ExitCode::SUCCESS);
     }
     let free = if unallocated {
@@ -787,6 +798,7 @@ fn run() -> Result<ExitCode, String> {
                     println!("... {} more run(s)", ranges.len() - 40);
                 }
             }
+            check_read_errors(&reader)?;
             return Ok(ExitCode::SUCCESS);
         }
         Some(ranges)
@@ -1007,7 +1019,13 @@ fn run() -> Result<ExitCode, String> {
         }
     }
 
-    let stop_reason = if budget.stopped_by_free_space() {
+    // A damaged image is not a clean end of data: the scan stopped where the
+    // read failed, so whatever came after is missing. Say so in the manifest
+    // and in the exit status, after writing what was recovered.
+    let read_error = reader.take_read_error();
+    let stop_reason = if read_error.is_some() {
+        Some("read_error")
+    } else if budget.stopped_by_free_space() {
         Some("free_space")
     } else if budget.stopped_by_limit() {
         Some("max_output")
@@ -1048,6 +1066,7 @@ fn run() -> Result<ExitCode, String> {
                 "stopped ({}): the scan did not finish, and the manifest covers \
                  only what was written",
                 match reason {
+                    "read_error" => "an image read failed; the image is damaged or truncated and the rest was not scanned".to_string(),
                     "free_space" =>
                         format!("free space fell to the {} floor", human(opts.min_free)),
                     _ => format!("at the {} output limit", human(opts.max_output)),
@@ -1068,6 +1087,11 @@ fn run() -> Result<ExitCode, String> {
             mibs,
             manifest_path
         );
+    }
+    if let Some(err) = read_error {
+        return Err(format!(
+            "{err}; the scan stopped there and its output is partial"
+        ));
     }
     Ok(ExitCode::SUCCESS)
 }
@@ -1278,6 +1302,7 @@ fn run_fat(
             );
         }
     }
+    check_read_errors(reader)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -1412,6 +1437,7 @@ fn run_ext4(
             );
         }
     }
+    check_read_errors(reader)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -1537,6 +1563,7 @@ fn run_hfs(
             records.len()
         );
     }
+    check_read_errors(reader)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -1665,6 +1692,7 @@ fn run_apfs(
             );
         }
     }
+    check_read_errors(reader)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -1902,6 +1930,7 @@ fn run_auto(
             eprintln!("skipped {note}");
         }
     }
+    check_read_errors(reader)?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -2325,7 +2354,9 @@ fn run_deleted_times(
     // 256 MiB per artefact: a journal is normally far smaller, and the cap
     // keeps a corrupt one from being read as gigabytes.
     let found = lazarbyte_core::ntfs::deletion_events(reader, base, !usn_all, 256 << 20)?;
-    report_deletions(found.events, opts, events_path, machine, &found.sources)
+    let code = report_deletions(found.events, opts, events_path, machine, &found.sources)?;
+    check_read_errors(reader)?;
+    Ok(code)
 }
 
 fn report_deletions(
@@ -2582,6 +2613,7 @@ fn run_ntfs(
             records.len()
         );
     }
+    check_read_errors(reader)?;
     Ok(ExitCode::SUCCESS)
 }
 

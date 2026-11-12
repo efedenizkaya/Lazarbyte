@@ -259,6 +259,20 @@ impl Source {
         }
     }
 
+    /// First read error seen by the underlying raw file, if any.
+    ///
+    /// EWF and the container readers keep their own extraction state; until
+    /// they report errors the same way, a damaged segment there is still not
+    /// distinguishable from end of data.
+    pub fn take_read_error(&self) -> Option<String> {
+        match self {
+            Source::Raw(r) => r.take_error(),
+            #[cfg(feature = "bitlocker")]
+            Source::BitLocker(b) => b.inner.take_read_error(),
+            _ => None,
+        }
+    }
+
     /// Short description of what was opened, for the scan banner.
     /// Wrap this source so BitLocker volumes read back as plaintext.
     ///
@@ -362,6 +376,10 @@ pub struct Reader {
     pub size: u64,
     pub path: String,
     pub is_device: bool,
+    /// First hard read error, so a truncated or damaged image is reported
+    /// instead of looking like end of file. Short reads at the real end are
+    /// not errors.
+    err: std::sync::Mutex<Option<String>>,
 }
 
 impl Reader {
@@ -401,10 +419,29 @@ impl Reader {
             size,
             path: path.to_string(),
             is_device,
+            err: std::sync::Mutex::new(None),
         })
     }
 
+    /// Remember the first read error; later ones after it are consequences.
+    fn record_error(&self, msg: String) {
+        if let Ok(mut slot) = self.err.lock() {
+            if slot.is_none() {
+                *slot = Some(msg);
+            }
+        }
+    }
+
+    /// Take the first read error seen, if any.
+    pub fn take_error(&self) -> Option<String> {
+        self.err.lock().ok().and_then(|mut slot| slot.take())
+    }
+
     /// Read up to `len` bytes at `offset`. A short result means EOF.
+    ///
+    /// A failed read is recorded and returned short: the caller cannot tell it
+    /// from EOF, so the scan boundary checks `take_error` and refuses to call
+    /// the output complete.
     pub fn pread(&self, offset: u64, len: usize) -> Vec<u8> {
         if offset >= self.size || len == 0 {
             return Vec::new();
@@ -417,7 +454,14 @@ impl Reader {
                 Ok(0) => break,
                 Ok(n) => done += n,
                 Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) => break,
+                Err(e) => {
+                    self.record_error(format!(
+                        "read failed at {:#x} ({}): {e}",
+                        offset + done as u64,
+                        self.path
+                    ));
+                    break;
+                }
             }
         }
         buf.truncate(done);
