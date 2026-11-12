@@ -54,6 +54,7 @@ BSD/0BSD, ISC, Unlicense, Zlib).
 | crypto-common | 0.1.7 | MIT OR Apache-2.0 | https://github.com/RustCrypto/traits |
 | digest | 0.10.7 | MIT OR Apache-2.0 | https://github.com/RustCrypto/traits |
 | flate2 | 1.1.9 | MIT OR Apache-2.0 | https://github.com/rust-lang/flate2-rs |
+| fs2 | 0.4.3 | MIT OR Apache-2.0 | https://github.com/danburkert/fs2-rs |
 | generic-array | 0.14.7 | MIT | https://github.com/fizyk20/generic-array |
 | inout | 0.1.4 | MIT OR Apache-2.0 | https://github.com/RustCrypto/utils |
 | libc | 0.2.189 | MIT OR Apache-2.0 | https://github.com/rust-lang/libc |

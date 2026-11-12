@@ -14,7 +14,29 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::sync::Arc;
+
+/// How much room a scan has left on its output volume.
+///
+/// Implemented by the caller, because the answer differs by platform: a desktop
+/// run asks the filesystem about a directory, while the Android bridge asks
+/// about the file descriptor it was given. The core only needs the number.
+pub trait FreeSpace: Send + Sync {
+    /// Bytes available to an unprivileged writer, or `None` if unknown.
+    /// Unknown never stops a scan: a missing answer must not look like a full
+    /// disk.
+    fn free_bytes(&self) -> Option<u64>;
+}
+
+/// Re-probe the volume at most once per this many written bytes. A statvfs per
+/// carved file would be one syscall per file; one per 16 MiB is invisible.
+pub const FREE_SPACE_CHECK_BYTES: u64 = 16 << 20;
+
+const STOP_NONE: u8 = 0;
+const STOP_LIMIT: u8 = 1;
+const STOP_FREE: u8 = 2;
+const STOP_HALTED: u8 = 3;
 
 #[derive(Clone, Debug)]
 pub struct Record {
@@ -100,16 +122,38 @@ impl Progress {
 pub struct OutputBudget {
     written: AtomicU64,
     limit: u64,
+    /// Stop once the output volume has this little room left (0 = no floor).
+    min_free: u64,
+    free: Option<Arc<dyn FreeSpace>>,
+    /// Written-bytes watermark for the next free-space probe.
+    next_free_check: AtomicU64,
     stop: AtomicBool,
+    stop_reason: AtomicU8,
 }
 
 impl OutputBudget {
     pub fn new(limit: u64) -> Self {
         OutputBudget {
-            written: AtomicU64::new(0),
             limit,
-            stop: AtomicBool::new(false),
+            ..Default::default()
         }
+    }
+
+    /// Build the budget a scan described by `opts` should use.
+    pub fn for_options(opts: &Options) -> Self {
+        OutputBudget {
+            min_free: opts.min_free,
+            free: opts.free_space.clone(),
+            ..OutputBudget::new(opts.max_output)
+        }
+    }
+
+    /// Enforce a free-space floor while writing. `free` is asked at most once
+    /// per `FREE_SPACE_CHECK_BYTES`, so this costs nothing on a fast scan.
+    pub fn with_free_space(mut self, min_free: u64, free: Arc<dyn FreeSpace>) -> Self {
+        self.min_free = min_free;
+        self.free = Some(free);
+        self
     }
 
     pub fn charge(&self, bytes: u64) {
@@ -120,20 +164,57 @@ impl OutputBudget {
         self.written.load(Ordering::Relaxed)
     }
 
+    fn halt_with(&self, reason: u8) {
+        self.stop.store(true, Ordering::Relaxed);
+        let _ = self.stop_reason.compare_exchange(
+            STOP_NONE,
+            reason,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
+    }
+
+    /// True when the scan stopped because the output volume ran low.
+    pub fn stopped_by_free_space(&self) -> bool {
+        self.stop_reason.load(Ordering::Relaxed) == STOP_FREE
+    }
+
+    /// True when the scan stopped at the `max_output` ceiling.
+    pub fn stopped_by_limit(&self) -> bool {
+        self.stop_reason.load(Ordering::Relaxed) == STOP_LIMIT
+    }
+
     /// Has the scan hit its limit? Sticky, so every worker sees it.
     pub fn exhausted(&self) -> bool {
         if self.stop.load(Ordering::Relaxed) {
             return true;
         }
         if self.limit > 0 && self.written() >= self.limit {
-            self.stop.store(true, Ordering::Relaxed);
+            self.halt_with(STOP_LIMIT);
             return true;
+        }
+        if self.min_free > 0 {
+            if let Some(free) = &self.free {
+                let written = self.written();
+                if written >= self.next_free_check.load(Ordering::Relaxed) {
+                    // Advance first: a second worker may probe too, which is
+                    // harmless, but nobody should probe on every call.
+                    self.next_free_check.store(
+                        written.saturating_add(FREE_SPACE_CHECK_BYTES),
+                        Ordering::Relaxed,
+                    );
+                    if free.free_bytes().is_some_and(|n| n <= self.min_free) {
+                        self.halt_with(STOP_FREE);
+                        return true;
+                    }
+                }
+            }
         }
         false
     }
 
     pub fn halt(&self) {
-        self.stop.store(true, Ordering::Relaxed);
+        self.halt_with(STOP_HALTED);
     }
 }
 
@@ -157,6 +238,10 @@ pub struct Options {
     pub max_output: u64,
     /// Stop when the output filesystem has less than this much free (0 = off).
     pub min_free: u64,
+    /// Where `min_free` is measured. The caller supplies it: a directory on
+    /// desktop, a file descriptor on Android. `None` means the floor cannot
+    /// be enforced, so the scan runs unchecked.
+    pub free_space: Option<Arc<dyn FreeSpace>>,
     /// Decode carved bytes to confirm the file is intact, not just well formed.
     pub validate: bool,
     /// Do not keep a carve whose decode failed.
@@ -182,6 +267,7 @@ impl Default for Options {
             jobs: 1,
             max_output: 0,
             min_free: 0,
+            free_space: None,
             validate: false,
             drop_failed: false,
         }
@@ -234,7 +320,8 @@ impl<'a> Carver<'a> {
             progress: None,
             opts,
             budget: None,
-            owned_budget: (opts.max_output > 0).then(|| OutputBudget::new(opts.max_output)),
+            owned_budget: (opts.max_output > 0 || (opts.min_free > 0 && opts.free_space.is_some()))
+                .then(|| OutputBudget::for_options(opts)),
             matcher,
             by_pattern,
             pattern_len,
@@ -574,7 +661,32 @@ pub fn run_ranges(
     progress: Option<&Progress>,
     on_range_done: impl FnMut(u64, u64, &[Record]) + Send,
 ) -> Vec<Record> {
-    let budget = OutputBudget::new(opts.max_output);
+    let budget = OutputBudget::for_options(opts);
+    run_ranges_with_budget(
+        reader,
+        sigs,
+        opts,
+        &budget,
+        ranges,
+        scan_end,
+        progress,
+        on_range_done,
+    )
+}
+
+/// `run_ranges` with a caller-owned budget, so the caller can tell afterwards
+/// whether the scan finished or stopped on the output limit / free-space floor.
+#[allow(clippy::too_many_arguments)]
+pub fn run_ranges_with_budget(
+    reader: &Source,
+    sigs: &[&'static Signature],
+    opts: &Options,
+    budget: &OutputBudget,
+    ranges: &[(u64, u64)],
+    scan_end: u64,
+    progress: Option<&Progress>,
+    on_range_done: impl FnMut(u64, u64, &[Record]) + Send,
+) -> Vec<Record> {
     // Ranges finish at different times, and one that finished should be
     // recorded then rather than when the slowest of its batch does: a live scan
     // of a 237 GB image had recorded nothing after sixteen hours because a whole
@@ -592,7 +704,6 @@ pub fn run_ranges(
     std::thread::scope(|scope| {
         for _ in 0..jobs {
             let next = &next;
-            let budget = &budget;
             let done = &on_range_done;
             let collected = &collected;
             let sigs = sigs.to_vec();
@@ -645,6 +756,18 @@ pub fn run_ranges(
 }
 
 pub fn run_parallel(reader: &Source, sigs: &[&'static Signature], opts: &Options) -> Vec<Record> {
+    let budget = OutputBudget::for_options(opts);
+    run_parallel_with_budget(reader, sigs, opts, &budget)
+}
+
+/// `run_parallel` with a caller-owned budget, so the caller can tell afterwards
+/// whether the scan finished or stopped early.
+pub fn run_parallel_with_budget(
+    reader: &Source,
+    sigs: &[&'static Signature],
+    opts: &Options,
+    budget: &OutputBudget,
+) -> Vec<Record> {
     let scan_end = if opts.length > 0 {
         (opts.start + opts.length).min(reader.size())
     } else {
@@ -652,9 +775,8 @@ pub fn run_parallel(reader: &Source, sigs: &[&'static Signature], opts: &Options
     };
     let total = scan_end.saturating_sub(opts.start);
     let jobs = opts.jobs.max(1);
-    let budget = OutputBudget::new(opts.max_output);
     if jobs == 1 || total == 0 {
-        let mut c = Carver::new(reader, sigs.to_vec(), opts).with_budget(&budget);
+        let mut c = Carver::new(reader, sigs.to_vec(), opts).with_budget(budget);
         let out = c.run();
         let mut out = containment_filter(out);
         if opts.dedup {
@@ -680,7 +802,6 @@ pub fn run_parallel(reader: &Source, sigs: &[&'static Signature], opts: &Options
             sub.dedup = false; // one dedup pass over the merged result instead
             sub.jobs = 1;
             let sigs = sigs.to_vec();
-            let budget = &budget;
             handles.push(scope.spawn(move || {
                 let mut c = Carver::new(reader, sigs, &sub).with_budget(budget);
                 c.run()

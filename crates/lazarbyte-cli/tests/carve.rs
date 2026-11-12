@@ -6,13 +6,17 @@
 mod builders;
 
 use builders::Rng;
-use lazarbyte_core::carver::{run_parallel, Carver, Options, Record};
+use lazarbyte_core::carver::{
+    run_parallel, Carver, FreeSpace, Options, OutputBudget, Record, FREE_SPACE_CHECK_BYTES,
+};
 use lazarbyte_core::handlers;
 use lazarbyte_core::reader::Source;
 use lazarbyte_core::signatures::{resolve_types, SIGNATURES};
 use lazarbyte_core::window::Window;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 struct Tmp(PathBuf);
 
@@ -971,4 +975,61 @@ fn a_compound_file_whose_streams_run_past_its_end_is_not_carved() {
         handlers::carve_ole(&mut w2).is_some(),
         "a sound compound file was refused"
     );
+}
+
+/// A volume that starts out roomy and then fills up.
+struct DecliningFreeSpace {
+    probes: AtomicU64,
+    /// How many answers are the roomy value before the volume reads as full.
+    roomy: u64,
+    first: u64,
+}
+
+impl FreeSpace for DecliningFreeSpace {
+    fn free_bytes(&self) -> Option<u64> {
+        let n = self.probes.fetch_add(1, Ordering::Relaxed);
+        if n < self.roomy {
+            Some(self.first)
+        } else {
+            Some(0)
+        }
+    }
+}
+
+#[test]
+fn the_budget_stops_a_scan_when_the_free_space_floor_is_reached() {
+    // The floor used to be checked once, before the first byte was written. A
+    // carve that outgrew its volume mid-run filled it and took the machine with
+    // it, so the budget now asks the volume while writing -- once per
+    // FREE_SPACE_CHECK_BYTES, never once per carved file.
+    let floor = 4 << 20;
+    let free = Arc::new(DecliningFreeSpace {
+        probes: AtomicU64::new(0),
+        roomy: 2, // the pre-scan probe and the first mid-scan one
+        first: 8 << 20,
+    });
+    let budget = OutputBudget::new(0).with_free_space(floor, free.clone());
+
+    assert!(
+        !budget.exhausted(),
+        "a scan must not stop before it has written anything"
+    );
+
+    budget.charge(FREE_SPACE_CHECK_BYTES);
+    assert!(
+        !budget.exhausted(),
+        "8 MiB free is above the 4 MiB floor; the scan has to continue"
+    );
+    assert_eq!(free.probes.load(Ordering::Relaxed), 2);
+
+    budget.charge(FREE_SPACE_CHECK_BYTES);
+    assert!(budget.exhausted(), "an empty volume did not stop the scan");
+    assert!(budget.stopped_by_free_space());
+    assert!(!budget.stopped_by_limit());
+
+    // Sticky: every worker sees the stop, and nobody probes again.
+    assert!(budget.exhausted());
+    assert_eq!(free.probes.load(Ordering::Relaxed), 3);
+    budget.halt(); // a later halt must not rewrite the reason
+    assert!(budget.stopped_by_free_space());
 }

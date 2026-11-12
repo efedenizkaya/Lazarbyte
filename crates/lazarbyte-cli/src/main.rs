@@ -1,12 +1,16 @@
 //! bcrumb-rs: signature-based file carver for disk images and block devices.
 
-use lazarbyte_core::carver::{run_parallel, run_ranges, Options, Progress, Record};
+use lazarbyte_core::carver::{
+    run_parallel_with_budget, run_ranges_with_budget, FreeSpace, Options, OutputBudget, Progress,
+    Record,
+};
 use lazarbyte_core::checkpoint;
 use lazarbyte_core::json;
 use lazarbyte_core::reader::Source;
 use lazarbyte_core::report;
 use lazarbyte_core::signatures::{resolve_types, Signature, SIGNATURES};
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Instant;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -265,6 +269,10 @@ fn merge_with_existing(out_dir: &str, mut records: Vec<Record>) -> Vec<Record> {
 }
 
 /// Bytes free on the filesystem holding `path` (or its nearest existing parent).
+///
+/// A single call, not a `df` subprocess: the CLI has to work where there is no
+/// shell (and where `df` is not guaranteed to exist), and the Android bridge
+/// will ask the same question about a file descriptor instead of a path.
 fn free_space(path: &str) -> Option<u64> {
     let mut probe = std::path::PathBuf::from(path);
     loop {
@@ -276,15 +284,16 @@ fn free_space(path: &str) -> Option<u64> {
             _ => return None,
         }
     }
-    let out = std::process::Command::new("df")
-        .arg("-Pk")
-        .arg(&probe)
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout);
-    let line = text.lines().nth(1)?;
-    let avail_kb: u64 = line.split_whitespace().nth(3)?.parse().ok()?;
-    Some(avail_kb * 1024)
+    fs2::available_space(&probe).ok()
+}
+
+/// The output directory as a `FreeSpace` source for the carver's budget.
+struct PathFreeSpace(String);
+
+impl FreeSpace for PathFreeSpace {
+    fn free_bytes(&self) -> Option<u64> {
+        free_space(&self.0)
+    }
 }
 
 fn human(bytes: u64) -> String {
@@ -329,6 +338,7 @@ fn main() -> ExitCode {
 fn run() -> Result<ExitCode, String> {
     let argv: Vec<String> = std::env::args().skip(1).collect();
     let mut opts = Options::default();
+    let mut min_free_set = false;
     let mut source: Option<String> = None;
     let mut types: Option<String> = None;
     let mut grep_patterns: Vec<String> = Vec::new();
@@ -418,7 +428,10 @@ fn run() -> Result<ExitCode, String> {
             "--no-dedup" => opts.dedup = false,
             "--dry-run" => opts.dry_run = true,
             "--max-output" => opts.max_output = parse_size(&next(&mut i)?)?,
-            "--min-free" => opts.min_free = parse_size(&next(&mut i)?)?,
+            "--min-free" => {
+                opts.min_free = parse_size(&next(&mut i)?)?;
+                min_free_set = true;
+            }
             "--grep" => grep_patterns.push(next(&mut i)?),
             "-i" | "--ignore-case" => ignore_case = true,
             "--regex" | "-E" => grep_regex = true,
@@ -793,21 +806,26 @@ fn run() -> Result<ExitCode, String> {
     }
 
     // Pre-flight: a carve can outgrow the volume it is written to, and filling
-    // the filesystem takes the machine with it. Warn before starting, and let
-    // the scan stop itself if it gets close.
+    // the filesystem takes the machine with it. Reject a start below the floor,
+    // then keep checking while writing (see OutputBudget::exhausted).
     if !opts.dry_run {
-        if opts.min_free == 0 {
-            opts.min_free = 2 << 30; // 2 GiB, unless the operator said otherwise
+        if !min_free_set {
+            opts.min_free = 2 << 30; // 2 GiB unless the operator said otherwise
+        }
+        if opts.min_free > 0 {
+            opts.free_space = Some(Arc::new(PathFreeSpace(opts.out_dir.clone())));
         }
         if let Some(free) = free_space(&opts.out_dir) {
             if !opts.quiet {
                 eprintln!(
-                    "output: {} free on the target volume, stopping at {} free{}",
+                    "output: {} free on the target volume{}",
                     human(free),
-                    human(opts.min_free),
-                    match opts.max_output {
-                        0 => String::new(),
-                        n => format!(" or {} written", human(n)),
+                    match (opts.min_free, opts.max_output) {
+                        (0, 0) => String::new(),
+                        (0, n) => format!(", stopping at {} written", human(n)),
+                        (m, 0) => format!(", stopping at {} free", human(m)),
+                        (m, n) =>
+                            format!(", stopping at {} free or {} written", human(m), human(n)),
                     }
                 );
             }
@@ -822,6 +840,7 @@ fn run() -> Result<ExitCode, String> {
             }
         }
     }
+    let budget = OutputBudget::for_options(&opts);
 
     let t0 = Instant::now();
     // A scan of a large image is long enough that dying part-way through should
@@ -847,16 +866,17 @@ fn run() -> Result<ExitCode, String> {
 
     let records = if opts.dry_run {
         match &free {
-            Some(ranges) => run_ranges(
+            Some(ranges) => run_ranges_with_budget(
                 &reader,
                 &sigs,
                 &opts,
+                &budget,
                 ranges,
                 scan_end,
                 Some(&progress),
                 |_, _, _| {},
             ),
-            None => run_parallel(&reader, &sigs, &opts),
+            None => run_parallel_with_budget(&reader, &sigs, &opts, &budget),
         }
     } else {
         let fingerprint = checkpoint::Fingerprint {
@@ -890,10 +910,11 @@ fn run() -> Result<ExitCode, String> {
             if show_progress {
                 spawn_reporter(&progress, &stop_reporting, machine, scope);
             }
-            let recs = run_ranges(
+            let recs = run_ranges_with_budget(
                 &reader,
                 &sigs,
                 &opts,
+                &budget,
                 &ranges,
                 scan_end,
                 Some(&progress),
@@ -986,6 +1007,13 @@ fn run() -> Result<ExitCode, String> {
         }
     }
 
+    let stop_reason = if budget.stopped_by_free_space() {
+        Some("free_space")
+    } else if budget.stopped_by_limit() {
+        Some("max_output")
+    } else {
+        None
+    };
     let manifest_path = write_manifest(
         &source,
         &reader,
@@ -993,6 +1021,7 @@ fn run() -> Result<ExitCode, String> {
         &opts,
         elapsed,
         source_hash.as_deref(),
+        stop_reason,
     )?;
     if machine {
         println!(
@@ -1003,20 +1032,26 @@ fn run() -> Result<ExitCode, String> {
                 ("source_size", json::number(reader.size())),
                 ("elapsed_s", json::float(elapsed)),
                 ("manifest", json::string(&manifest_path)),
+                (
+                    "incomplete",
+                    match stop_reason {
+                        Some(_) => json::boolean(true),
+                        None => json::boolean(false),
+                    },
+                ),
             ])
         );
     }
     if !opts.quiet {
-        let written: u64 = records
-            .iter()
-            .filter(|r| !r.path.is_empty())
-            .map(|r| r.size)
-            .sum();
-        if opts.max_output > 0 && written >= opts.max_output {
+        if let Some(reason) = stop_reason {
             eprintln!(
-                "stopped at the {} output limit: the scan did not finish, and \
-                 the manifest covers only what was written",
-                human(opts.max_output)
+                "stopped ({}): the scan did not finish, and the manifest covers \
+                 only what was written",
+                match reason {
+                    "free_space" =>
+                        format!("free space fell to the {} floor", human(opts.min_free)),
+                    _ => format!("at the {} output limit", human(opts.max_output)),
+                }
             );
         }
         let mibs = reader.size() as f64 / (1 << 20) as f64 / elapsed.max(1e-9);
@@ -2674,6 +2709,7 @@ fn write_manifest(
     opts: &Options,
     elapsed: f64,
     source_sha256: Option<&str>,
+    stop_reason: Option<&str>,
 ) -> Result<String, String> {
     let abs = std::fs::canonicalize(source)
         .map(|p| p.to_string_lossy().to_string())
@@ -2713,6 +2749,13 @@ fn write_manifest(
     ];
     if let Some(sha) = source_sha256 {
         fields.push(("source_sha256", json::string(sha)));
+    }
+    // A scan that stopped early must say so: the manifest then covers only
+    // what was actually written, and a later reader must not mistake it for a
+    // complete inventory of the source.
+    if let Some(reason) = stop_reason {
+        fields.push(("incomplete", json::boolean(true)));
+        fields.push(("stop_reason", json::string(reason)));
     }
     fields.push(("files", json::array(files)));
     let manifest = json::object(fields);

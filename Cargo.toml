@@ -25,6 +25,10 @@ sha1 = "0.10"
 regex = { version = "1", default-features = false, features = ["std", "perf", "unicode-case", "unicode-perl"] }
 # Pure-Rust inflate (miniz_oxide), for the gzip handler. No C toolchain needed.
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
+# "How much room is left on this volume?" for the output directory. Small
+# wrapper over statvfs (unix, including Android) and GetDiskFreeSpaceEx
+# (Windows); used by the CLI only, never by the core or the app.
+fs2 = "0.4"
 
 [profile.release]
 # Arithmetic on values read from an image must never wrap silently: a wrapped
