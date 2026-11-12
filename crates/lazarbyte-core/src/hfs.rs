@@ -14,7 +14,6 @@
 //! confidence rather than as complete.
 
 use crate::reader::Source;
-use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 
 /// 1904-01-01 to 1970-01-01, in seconds: the HFS epoch.
@@ -163,6 +162,27 @@ impl<'a> Volume<'a> {
             catalog_extents,
             catalog_size,
         })
+    }
+
+    /// Where a fork's bytes live, in file order, staying inside the volume.
+    fn fork_pieces(&self, extents: &[(u64, u64)], size: u64) -> Vec<crate::recover::Piece> {
+        let mut pieces = Vec::with_capacity(extents.len());
+        let mut pos = 0u64;
+        for &(start, count) in extents {
+            if pos >= size {
+                break;
+            }
+            let want = count.saturating_mul(self.block_size).min(size - pos);
+            let at = self
+                .base
+                .saturating_add(start.saturating_mul(self.block_size));
+            if at.saturating_add(want) > self.base.saturating_add(self.volume_size) {
+                break;
+            }
+            pieces.push(crate::recover::Piece::Data(at, want));
+            pos += want;
+        }
+        pieces
     }
 
     /// Read a fork from its extents. The bool says whether every byte came off
@@ -525,10 +545,7 @@ pub fn recover(
         if !seen.insert((entry.cnid, entry.size)) {
             continue;
         }
-        let (data, complete) = vol.read_fork(&entry.extents, entry.size);
-        if data.is_empty() {
-            continue;
-        }
+        let pieces = vol.fork_pieces(&entry.extents, entry.size);
         let vpath = paths.get(&entry.cnid).cloned().unwrap_or_default();
         let label = if vpath.is_empty() {
             entry.name.clone()
@@ -540,6 +557,7 @@ pub fn recover(
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_else(|| "bin".into());
         let mut path = String::new();
+        let mut dest: Option<std::path::PathBuf> = None;
         if !opts.dry_run {
             let rel = if vpath.is_empty() {
                 std::path::PathBuf::from("_orphans").join(format!("cnid_{}.{ext}", entry.cnid))
@@ -565,9 +583,12 @@ pub fn recover(
                     .unwrap_or_default();
                 p = p.with_file_name(format!("{stem}_cnid{}{suffix}", entry.cnid));
             }
-            if std::fs::write(&p, &data).is_err() {
-                continue;
-            }
+            dest = Some(p);
+        }
+        let Some(written) = crate::recover::copy(src, &pieces, entry.size, dest.as_deref()) else {
+            continue;
+        };
+        if let Some(p) = dest {
             path = p.to_string_lossy().to_string();
         }
         let rec = FileRecord {
@@ -575,8 +596,8 @@ pub fn recover(
             name: label,
             ext,
             size: entry.size,
-            sha256: format!("{:x}", Sha256::digest(&data)),
-            validated: complete,
+            sha256: written.sha256,
+            validated: written.complete,
             deleted: is_deleted,
             path,
             timestamps: entry.timestamps,

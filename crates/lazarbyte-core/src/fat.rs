@@ -15,7 +15,6 @@
 //! "no FAT chain" flag says outright that the file was contiguous.
 
 use crate::reader::Source;
-use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 
 fn u16le(b: &[u8], o: usize) -> u64 {
@@ -397,7 +396,10 @@ impl<'a> Volume<'a> {
     /// The freed chain cannot be followed, so this is the only thing available
     /// -- and the reason a fragmented file comes back wrong rather than not at
     /// all. The caller reports the uncertainty.
-    fn read_contiguous(&self, first_cluster: u64, size: u64) -> Option<(Vec<u8>, bool)> {
+    /// The run of bytes a file opens with, and whether it fits inside the
+    /// volume. A FAT file with a fragmented chain comes back as its first run
+    /// and the record says so; the length is never past the volume.
+    fn contiguous(&self, first_cluster: u64, size: u64) -> Option<(u64, u64)> {
         if first_cluster < 2 || size == 0 {
             return None;
         }
@@ -406,25 +408,7 @@ impl<'a> Volume<'a> {
         if at >= volume_end {
             return None;
         }
-        // A declared length reaching past the volume is not this file's.
-        let want = size.min(volume_end - at);
-        let mut data = Vec::with_capacity(want.min(8 << 20) as usize);
-        let mut done = 0u64;
-        while done < want {
-            let blk = self
-                .src
-                .pread(at + done, ((want - done).min(8 << 20)) as usize);
-            if blk.is_empty() {
-                break;
-            }
-            done += blk.len() as u64;
-            data.extend_from_slice(&blk);
-        }
-        if data.is_empty() {
-            return None;
-        }
-        let complete = data.len() as u64 == size;
-        Some((data, complete))
+        Some((at, size.min(volume_end - at)))
     }
 }
 
@@ -704,7 +688,7 @@ pub fn recover(
         if ent.size < opts.min_size.max(1) {
             continue;
         }
-        let Some((data, complete)) = vol.read_contiguous(ent.start, ent.size) else {
+        let Some((at, want)) = vol.contiguous(ent.start, ent.size) else {
             continue;
         };
         let name = if ent.name.is_empty() {
@@ -717,6 +701,7 @@ pub fn recover(
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_else(|| "bin".into());
         let mut path = String::new();
+        let mut dest: Option<std::path::PathBuf> = None;
         if !opts.dry_run {
             let dir = std::path::PathBuf::from(&opts.out_dir).join(kind);
             if std::fs::create_dir_all(&dir).is_err() {
@@ -737,9 +722,20 @@ pub fn recover(
                     .unwrap_or_default();
                 p = p.with_file_name(format!("{stem}_{:x}{suffix}", ent.offset));
             }
-            if std::fs::write(&p, &data).is_err() {
-                continue;
-            }
+            dest = Some(p);
+        }
+        let Some(written) = crate::recover::copy(
+            src,
+            &[crate::recover::Piece::Data(at, want)],
+            want,
+            dest.as_deref(),
+        ) else {
+            continue;
+        };
+        // A declared size past the volume's end is not this file's: the record
+        // keeps what could be read and is marked incomplete.
+        let complete = written.complete && want == ent.size;
+        if let Some(p) = dest {
             path = p.to_string_lossy().to_string();
         }
         let rec = FileRecord {
@@ -747,8 +743,8 @@ pub fn recover(
             name,
             ext,
             offset: ent.offset,
-            size: data.len() as u64,
-            sha256: format!("{:x}", Sha256::digest(&data)),
+            size: written.bytes,
+            sha256: written.sha256,
             validated: complete,
             deleted: ent.deleted,
             path,

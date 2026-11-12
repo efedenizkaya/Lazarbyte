@@ -17,7 +17,6 @@
 //! in an extended attribute rather than in extents.
 
 use crate::reader::Source;
-use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 const NX_MAGIC: &[u8; 4] = b"NXSB";
@@ -349,41 +348,44 @@ impl<'a> Container<'a> {
         None
     }
 
-    /// Reassemble a file from the extents found for it.
-    fn read_extents(&self, exts: &BTreeMap<u64, (u64, u64)>, size: u64) -> (Vec<u8>, bool) {
-        let mut data: Vec<u8> = Vec::with_capacity(size.min(8 << 20) as usize);
-        let mut ok = true;
+    /// Where a file's bytes live, in file order, staying inside the volume.
+    ///
+    /// A gap in the logical offsets, or an extent the delete cleared, becomes
+    /// a hole: the record then says the file is not all here.
+    fn extent_pieces(
+        &self,
+        exts: &BTreeMap<u64, (u64, u64)>,
+        size: u64,
+    ) -> Vec<crate::recover::Piece> {
+        let mut pieces = Vec::with_capacity(exts.len());
+        let mut pos = 0u64;
         for (&logical, &(phys, length)) in exts {
-            if logical != data.len() as u64 {
-                // A gap, or extents out of order: some version of this file's
-                // map is missing, so what comes out is not the whole file.
-                ok = false;
+            if pos >= size {
+                break;
             }
-            let want = length.min(size.saturating_sub(data.len() as u64).max(1));
-            if phys == 0 {
-                data.resize(data.len() + want as usize, 0);
-                ok = false;
+            if logical > pos {
+                let gap = (logical - pos).min(size - pos);
+                pieces.push(crate::recover::Piece::Hole(gap));
+                pos += gap;
+                if pos >= size {
+                    break;
+                }
+            }
+            let want = length.min(size - pos);
+            if want == 0 {
                 continue;
             }
-            let at = self
-                .base
-                .saturating_add(phys.saturating_mul(self.block_size));
-            let chunk = self.src.pread(at, want as usize);
-            if chunk.is_empty() {
-                ok = false;
-                break;
+            if phys == 0 {
+                pieces.push(crate::recover::Piece::Hole(want));
+            } else {
+                let at = self
+                    .base
+                    .saturating_add(phys.saturating_mul(self.block_size));
+                pieces.push(crate::recover::Piece::Data(at, want));
             }
-            data.extend_from_slice(&chunk);
-            if data.len() as u64 >= size {
-                break;
-            }
+            pos += want;
         }
-        data.truncate(size as usize);
-        if (data.len() as u64) < size {
-            data.resize(size as usize, 0);
-            ok = false;
-        }
-        (data, ok)
+        pieces
     }
 }
 
@@ -554,16 +556,14 @@ pub fn recover(
         if !seen.insert((file_id, size)) {
             continue;
         }
-        let (data, complete) = cont.read_extents(exts, size);
-        if data.is_empty() {
-            continue;
-        }
+        let pieces = cont.extent_pieces(exts, size);
         let label = named.clone().unwrap_or_else(|| format!("inode_{file_id}"));
         let ext = std::path::Path::new(&label)
             .extension()
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_else(|| "bin".into());
         let mut path = String::new();
+        let mut dest: Option<std::path::PathBuf> = None;
         if !opts.dry_run {
             let dir = std::path::PathBuf::from(&opts.out_dir).join("apfs");
             let rel = if named.is_some() {
@@ -588,9 +588,12 @@ pub fn recover(
                     .unwrap_or_default();
                 p = p.with_file_name(format!("{stem}_{file_id}{suffix}"));
             }
-            if std::fs::write(&p, &data).is_err() {
-                continue;
-            }
+            dest = Some(p);
+        }
+        let Some(written) = crate::recover::copy(src, &pieces, size, dest.as_deref()) else {
+            continue;
+        };
+        if let Some(p) = dest {
             path = p.to_string_lossy().to_string();
         }
         let rec = FileRecord {
@@ -598,10 +601,10 @@ pub fn recover(
             name: label,
             ext,
             size,
-            sha256: format!("{:x}", Sha256::digest(&data)),
+            sha256: written.sha256,
             // Only a file whose map was complete and whose name was found is
             // fully accounted for.
-            validated: complete && named.is_some(),
+            validated: written.complete && named.is_some(),
             path,
             timestamps: meta.map(|m| m.timestamps).unwrap_or_default(),
         };

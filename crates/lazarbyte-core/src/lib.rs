@@ -40,6 +40,7 @@ pub mod jsonin;
 pub mod ntfs;
 pub mod partition;
 pub mod reader;
+pub mod recover;
 pub mod report;
 pub mod signatures;
 pub mod validate;

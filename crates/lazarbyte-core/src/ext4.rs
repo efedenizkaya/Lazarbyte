@@ -16,7 +16,6 @@
 //! inodes, and the journal replay above.
 
 use crate::reader::Source;
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 const EXT_MAGIC: u64 = 0xEF53;
@@ -121,6 +120,13 @@ pub struct Volume<'a> {
     bitmaps: Vec<u64>,
     blocks_per_group: u64,
     first_data_block: u64,
+}
+
+impl<'a> Volume<'a> {
+    /// Bytes the volume covers, from its block count.
+    fn size_bytes(&self) -> u64 {
+        self.blocks_count.saturating_mul(self.block_size)
+    }
 }
 
 impl<'a> Volume<'a> {
@@ -401,6 +407,32 @@ impl<'a> Volume<'a> {
         Some((data, ok))
     }
 
+    /// Where a file's content lives, in file order; `None` when the extent
+    /// map is gone.
+    fn file_pieces(&self, raw: &[u8], inode: &Inode) -> Option<Vec<crate::recover::Piece>> {
+        let (ranges, _) = self.block_map(raw, inode)?;
+        let mut pieces = Vec::with_capacity(ranges.len());
+        let mut pos = 0u64;
+        for (phys, count) in ranges {
+            if pos >= inode.size {
+                break;
+            }
+            let want = count.saturating_mul(self.block_size).min(inode.size - pos);
+            if phys == 0 {
+                // A sparse hole, or a pointer the delete cleared: zeros, and
+                // the record says the file is not all here.
+                pieces.push(crate::recover::Piece::Hole(want));
+            } else {
+                let at = self
+                    .base
+                    .saturating_add(phys.saturating_mul(self.block_size));
+                pieces.push(crate::recover::Piece::Data(at, want));
+            }
+            pos += want;
+        }
+        Some(pieces)
+    }
+
     /// `inode -> (name, parent)` from every directory on the volume.
     ///
     /// Both live entries and the stale ones left in a record's slack: when a
@@ -598,7 +630,12 @@ pub fn recover(
         if inode.size == 0 || inode.size < opts.min_size.max(1) {
             continue;
         }
-        let Some((data, complete)) = vol.read_file(&raw, &inode) else {
+        // A deleted inode's size field is stale data; one larger than the
+        // volume cannot describe a file that was ever here.
+        if inode.size > vol.size_bytes() {
+            continue;
+        }
+        let Some(pieces) = vol.file_pieces(&raw, &inode) else {
             // ext4 clears the extent tree when it frees an inode; the file is
             // named in its directory and its content is gone.
             map_gone += 1;
@@ -615,6 +652,7 @@ pub fn recover(
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_else(|| "bin".into());
         let mut path = String::new();
+        let mut dest: Option<std::path::PathBuf> = None;
         if !opts.dry_run {
             let rel = if vpath.is_empty() || vpath == "_orphan_" {
                 std::path::PathBuf::from("_orphans").join(format!("inode_{ino}.{ext}"))
@@ -641,9 +679,12 @@ pub fn recover(
                     .unwrap_or_default();
                 p = p.with_file_name(format!("{stem}_ino{ino}{suffix}"));
             }
-            if std::fs::write(&p, &data).is_err() {
-                continue;
-            }
+            dest = Some(p);
+        }
+        let Some(written) = crate::recover::copy(src, &pieces, inode.size, dest.as_deref()) else {
+            continue;
+        };
+        if let Some(p) = dest {
             path = p.to_string_lossy().to_string();
         }
         let rec = FileRecord {
@@ -651,10 +692,10 @@ pub fn recover(
             name,
             ext,
             size: inode.size,
-            sha256: format!("{:x}", Sha256::digest(&data)),
+            sha256: written.sha256,
             // A file is only fully accounted for when every block was read and
             // its name was found.
-            validated: complete && !vpath.is_empty() && vpath != "_orphan_",
+            validated: written.complete && !vpath.is_empty() && vpath != "_orphan_",
             deleted,
             path,
             timestamps: inode.times,

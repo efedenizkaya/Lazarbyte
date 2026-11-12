@@ -269,6 +269,7 @@ impl Source {
             Source::Raw(r) => r.take_error(),
             #[cfg(feature = "bitlocker")]
             Source::BitLocker(b) => b.inner.take_read_error(),
+            #[cfg(any(feature = "ewf", feature = "containers"))]
             _ => None,
         }
     }
