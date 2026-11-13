@@ -57,6 +57,7 @@ fn fat_free_space_comes_from_the_fat_and_excludes_live_data() {
         dry_run: true,
         include_live: true,
         min_size: 0,
+        cancel: None,
     };
     let (records, _kind, _cluster) = lazarbyte_core::fat::recover(&src, 0, &opts, |_| {}).unwrap();
     let live = records

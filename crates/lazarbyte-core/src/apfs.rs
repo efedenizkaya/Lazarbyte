@@ -116,6 +116,9 @@ pub struct Options {
     pub out_dir: String,
     pub dry_run: bool,
     pub min_size: u64,
+    /// Set by the front end to stop the sweep early. Files already written stay
+    /// on disk; the run is reported as incomplete.
+    pub cancel: Option<std::sync::Arc<crate::cancel::Cancel>>,
 }
 
 #[derive(Default)]
@@ -507,6 +510,9 @@ pub fn recover(
     let per_read = (8 << 20) / bs * bs;
     let mut block = 0u64;
     while block < cont.block_count {
+        if crate::cancel::requested(opts.cancel.as_ref()) {
+            break;
+        }
         let at = cont.base.saturating_add(block * cont.block_size);
         let buf = cont.src.pread(at, per_read);
         if buf.len() < bs {
@@ -528,6 +534,9 @@ pub fn recover(
     let mut ids: Vec<u64> = extents.keys().copied().collect();
     ids.sort_unstable();
     for file_id in ids {
+        if crate::cancel::requested(opts.cancel.as_ref()) {
+            break;
+        }
         let exts = &extents[&file_id];
         // Prefer the full path; fall back to the bare name when the parent
         // chain did not survive.

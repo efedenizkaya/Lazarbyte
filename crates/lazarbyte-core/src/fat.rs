@@ -120,6 +120,9 @@ pub struct Options {
     pub dry_run: bool,
     pub include_live: bool,
     pub min_size: u64,
+    /// Set by the front end to stop the walk early. Files already written stay
+    /// on disk; the run is reported as incomplete.
+    pub cancel: Option<std::sync::Arc<crate::cancel::Cancel>>,
 }
 
 /// Where a directory's bytes came from, so an entry's offset on the volume can
@@ -682,6 +685,9 @@ pub fn recover(
     let mut out = Vec::new();
     let mut used: HashSet<String> = HashSet::new();
     for ent in &entries {
+        if crate::cancel::requested(opts.cancel.as_ref()) {
+            break;
+        }
         if !ent.deleted && !opts.include_live {
             continue;
         }

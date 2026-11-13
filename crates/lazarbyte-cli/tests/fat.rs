@@ -13,9 +13,11 @@
 //! its own `._` sidecar files, which are ordinary files too.
 
 use flate2::read::GzDecoder;
+use lazarbyte_core::cancel::Cancel;
 use lazarbyte_core::fat;
 use lazarbyte_core::reader::Source;
 use std::io::Read;
+use std::sync::Arc;
 
 struct Tmp(std::path::PathBuf);
 
@@ -61,6 +63,7 @@ fn recover(name: &str, include_live: bool) -> (Vec<fat::FileRecord>, &'static st
         dry_run: false,
         include_live,
         min_size: 0,
+        cancel: None,
     };
     let (records, kind, _cluster) = fat::recover(&src, 0, &opts, |_| {}).expect("recover failed");
     (records, kind, dir, img)
@@ -173,8 +176,39 @@ fn a_volume_that_is_not_fat_is_refused() {
         dry_run: true,
         include_live: false,
         min_size: 0,
+        cancel: None,
     };
     let err = fat::recover(&src, 0, &opts, |_| {}).expect_err("accepted");
     assert!(err.contains("FAT"), "{err}");
     let _ = std::fs::remove_file(&p);
+}
+
+/// The undelete walk is long on a real volume, so it has to stop when asked.
+/// What it already wrote stays, and each record is still complete.
+#[test]
+fn cancelling_the_walk_keeps_what_was_already_recovered() {
+    let (dir, img) = Tmp::image("fat16");
+    let src = Source::open(&img).unwrap();
+    let cancel = Arc::new(Cancel::new());
+    let opts = fat::Options {
+        out_dir: dir.0.join("out").to_string_lossy().to_string(),
+        dry_run: false,
+        include_live: true,
+        min_size: 0,
+        cancel: Some(Arc::clone(&cancel)),
+    };
+    let mut reported = 0;
+    let (records, _kind, _cluster) = fat::recover(&src, 0, &opts, |_| {
+        reported += 1;
+        cancel.cancel();
+    })
+    .expect("recover failed");
+
+    assert_eq!(reported, 1, "the walk must stop after the file in progress");
+    assert_eq!(records.len(), 1);
+    let path = &records[0].path;
+    assert!(
+        std::path::Path::new(path).exists(),
+        "the file reported must be on disk: {path}"
+    );
 }

@@ -60,3 +60,25 @@ A carve above `max_validate` is still written, but it is not decoded, so its
 record cannot claim "verified" -- at most the structure walk's "high". Undelete
 output is streamed in 8 MiB reads regardless of file size, so a recovered
 file's memory cost does not grow with it.
+
+## Stopping a scan
+
+A phone user can leave the app while a scan runs, so `lazarbyte-core` takes an
+optional `Cancel` handle (`carver::Options::cancel`, and the same field on each
+undelete `Options`). Any thread may call `Cancel::cancel()`; the scan checks it
+between chunks, between candidate files and between filesystem entries, and
+stops starting new work.
+
+What cancellation guarantees:
+
+- Whatever was already written stays on disk, with a manifest entry.
+- A file already being copied is finished, so its record is not a truncated
+  file with a full-file hash. One file, not the whole scan, is the worst case.
+- In a range scan, a range stopped by the flag is **not** reported as complete,
+  so `--resume` scans it again instead of leaving its tail unexamined.
+- `run_ranges`/`run_parallel` return `Ok` with the partial records; the caller
+  must check the flag (or its own handle) and report the run as incomplete. The
+  core never reports a cancelled scan as a finished one.
+
+Nothing is deleted by cancelling: the flag only stops new work.
+

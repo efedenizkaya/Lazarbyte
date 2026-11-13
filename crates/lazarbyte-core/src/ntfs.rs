@@ -273,6 +273,18 @@ impl<'a> Volume<'a> {
     /// 90 MiB/s. The table is contiguous within each run, so it is read a few
     /// megabytes at a time and the records are sliced out of the buffer.
     pub fn for_each_record(&self, mut f: impl FnMut(u64, &[u8])) {
+        self.for_each_record_while(|num, rec| {
+            f(num, rec);
+            true
+        });
+    }
+
+    /// As `for_each_record`, but the callback says whether to keep going.
+    ///
+    /// A cancelled recovery has to stop mid-walk: reading the rest of a
+    /// million-record table only to discard it is the work cancellation is
+    /// meant to avoid.
+    pub fn for_each_record_while(&self, mut f: impl FnMut(u64, &[u8]) -> bool) {
         const BLOCK: u64 = 8 << 20;
         let mut num = 0u64;
         for &(lcn, count) in &self.mft_runs {
@@ -296,7 +308,9 @@ impl<'a> Volume<'a> {
                 while at + self.record_size <= got && num < self.record_count {
                     let raw = &buf[at as usize..(at + self.record_size) as usize];
                     if let Some(rec) = self.fixup(raw) {
-                        f(num, &rec);
+                        if !f(num, &rec) {
+                            return;
+                        }
                     }
                     at += self.record_size;
                     num += 1;
@@ -730,6 +744,9 @@ pub struct Options {
     /// A volume holds a million files and an examination usually wants one
     /// corner of it -- a recycle bin, one user's profile, one folder.
     pub only_path: Option<String>,
+    /// Set by the front end to stop the walk early. Files already written stay
+    /// on disk; the run is reported as incomplete.
+    pub cancel: Option<std::sync::Arc<crate::cancel::Cancel>>,
 }
 
 /// Walk the MFT and recover deleted files.
@@ -760,13 +777,24 @@ pub fn recover_reporting(
     // memory all at once.
     let mut infos: HashMap<u64, PathInfo> = HashMap::new();
     let total = vol.record_count;
-    vol.for_each_record(|num, rec| {
+    let mut cancelled = false;
+    vol.for_each_record_while(|num, rec| {
+        if crate::cancel::requested(opts.cancel.as_ref()) {
+            cancelled = true;
+            return false;
+        }
         if let Some(info) = parse_path_info(&vol, rec) {
             infos.insert(num, info);
         }
         // First of two passes over the table.
         on_progress(num / 2, total);
+        true
     });
+    if cancelled {
+        // Nothing has been recovered yet, and the path table is partial: the
+        // second pass would report files under invented names.
+        return Ok(Vec::new());
+    }
     let paths = build_paths(&infos);
     drop(infos);
     let mut out = Vec::new();
@@ -777,16 +805,19 @@ pub fn recover_reporting(
     // Each record is handled as it is read and then dropped. Collecting them
     // first costs a gigabyte per few hundred thousand files -- the mistake this
     // pass was rewritten to avoid.
-    vol.for_each_record(|num, rec| {
+    vol.for_each_record_while(|num, rec| {
+        if crate::cancel::requested(opts.cancel.as_ref()) {
+            return false;
+        }
         on_progress(total / 2 + num / 2, total);
         let Some(info) = parse_record_bytes(&vol, num, rec) else {
-            return;
+            return true;
         };
         if info.base_record != 0 || info.is_dir || info.data.is_empty() || info.name.is_empty() {
-            return;
+            return true;
         }
         if info.in_use && !opts.include_live {
-            return;
+            return true;
         }
         let vpath = paths.get(&num).cloned().unwrap_or_default();
         for stream in &info.data {
@@ -795,6 +826,7 @@ pub fn recover_reporting(
                 out.push(rec);
             }
         }
+        true
     });
     Ok(out)
 }

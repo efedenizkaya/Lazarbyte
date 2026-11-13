@@ -15,6 +15,7 @@ pub mod apfs;
 pub mod artifacts;
 #[cfg(feature = "bitlocker")]
 pub mod bitlocker;
+pub mod cancel;
 pub mod carver;
 pub mod checkpoint;
 #[cfg(feature = "bitlocker")]

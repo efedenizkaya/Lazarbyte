@@ -60,6 +60,7 @@ fn recover(include_live: bool) -> (Vec<hfs::FileRecord>, hfs::Summary, Tmp) {
         include_live,
         min_size: 0,
         scan_volume: true,
+        cancel: None,
     };
     let (records, summary) = hfs::recover(&src, 0, &opts, |_| {}).expect("recover failed");
     (records, summary, dir)

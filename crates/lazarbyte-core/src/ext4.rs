@@ -85,6 +85,9 @@ pub struct Options {
     pub dry_run: bool,
     pub include_live: bool,
     pub min_size: u64,
+    /// Set by the front end to stop the walk early. Files already written stay
+    /// on disk; the run is reported as incomplete.
+    pub cancel: Option<std::sync::Arc<crate::cancel::Cancel>>,
 }
 
 struct Inode {
@@ -616,6 +619,9 @@ pub fn recover(
     let mut map_gone = 0u64;
 
     for ino in vol.first_ino..=vol.inodes_count {
+        if crate::cancel::requested(opts.cancel.as_ref()) {
+            break;
+        }
         let Some(raw) = vol.inode_raw(ino) else {
             continue;
         };

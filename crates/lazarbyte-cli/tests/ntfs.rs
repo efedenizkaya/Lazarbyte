@@ -32,6 +32,7 @@ fn recover(tag: &str, include_live: bool) -> (Vec<ntfs::FileRecord>, PathBuf) {
         include_live,
         min_size: 0,
         only_path: None,
+        cancel: None,
     };
     let recs = ntfs::recover(&src, 0, &opts, |_| {}).expect("recover failed");
     (recs, out)
@@ -117,6 +118,7 @@ fn a_volume_without_ntfs_is_refused() {
         include_live: false,
         min_size: 0,
         only_path: None,
+        cancel: None,
     };
     let err = ntfs::recover(&src, 0, &opts, |_| {})
         .err()
@@ -234,6 +236,7 @@ fn a_path_through_a_reused_parent_record_is_not_invented() {
         include_live: false,
         min_size: 0,
         only_path: None,
+        cancel: None,
     };
     let recs = ntfs::recover(&src, 0, &opts, |_| {}).expect("recover failed");
     let rec = recs
@@ -313,6 +316,7 @@ fn only_one_corner_of_the_volume_can_be_asked_for() {
             include_live: true,
             min_size: 0,
             only_path: None,
+            cancel: None,
         },
         |_| {},
     )
@@ -332,6 +336,7 @@ fn only_one_corner_of_the_volume_can_be_asked_for() {
             include_live: true,
             min_size: 0,
             only_path: Some(needle.clone()),
+            cancel: None,
         },
         |_| {},
     )

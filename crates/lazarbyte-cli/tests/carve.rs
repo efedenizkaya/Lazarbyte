@@ -6,8 +6,10 @@
 mod builders;
 
 use builders::Rng;
+use lazarbyte_core::cancel::Cancel;
 use lazarbyte_core::carver::{
-    run_parallel, Carver, FreeSpace, Options, OutputBudget, Record, FREE_SPACE_CHECK_BYTES,
+    run_parallel, run_ranges_with_budget, Carver, FreeSpace, Options, OutputBudget, Record,
+    FREE_SPACE_CHECK_BYTES,
 };
 use lazarbyte_core::handlers;
 use lazarbyte_core::reader::Source;
@@ -1068,4 +1070,75 @@ fn the_budget_stops_a_scan_when_the_free_space_floor_is_reached() {
     assert_eq!(free.probes.load(Ordering::Relaxed), 3);
     budget.halt(); // a later halt must not rewrite the reason
     assert!(budget.stopped_by_free_space());
+}
+
+/// A scan that has been cancelled must stop starting ranges, and the range it
+/// was on must stay outstanding so a resume can finish it.
+#[test]
+fn a_cancelled_range_scan_stops_between_ranges() {
+    let dir = Tmp::new("cancel-ranges");
+    let planted = planted_image(&dir);
+    let reader = Source::open(planted.path.to_str().unwrap()).unwrap();
+    let sigs: Vec<_> = SIGNATURES.iter().collect();
+    let cancel = Arc::new(Cancel::new());
+    let opts = Options {
+        out_dir: dir.join("out").to_string_lossy().to_string(),
+        quiet: true,
+        jobs: 1,
+        chunk_size: 1 << 16,
+        cancel: Some(Arc::clone(&cancel)),
+        ..Options::default()
+    };
+    let budget = OutputBudget::for_options(&opts);
+    let end = reader.size();
+    let half = end / 2;
+    let mut finished: Vec<(u64, u64)> = Vec::new();
+    let records = run_ranges_with_budget(
+        &reader,
+        &sigs,
+        &opts,
+        &budget,
+        &[(0, half), (half, end)],
+        end,
+        None,
+        |a, b, _| {
+            finished.push((a, b));
+            // The front end pressed stop while the first range was reported.
+            cancel.cancel();
+        },
+    )
+    .expect("scan");
+
+    assert_eq!(
+        finished,
+        vec![(0, half)],
+        "a cancelled scan must not report the range it never scanned as done"
+    );
+    assert!(
+        records.iter().all(|r| r.offset < half),
+        "records from the unscanned range must not appear"
+    );
+}
+
+/// Cancelling before the scan starts is not an error: the caller gets an empty
+/// result, and the flag is what says the run did not complete.
+#[test]
+fn a_scan_cancelled_before_it_starts_carves_nothing() {
+    let dir = Tmp::new("cancel-before");
+    let planted = planted_image(&dir);
+    let reader = Source::open(planted.path.to_str().unwrap()).unwrap();
+    let sigs: Vec<_> = SIGNATURES.iter().collect();
+    let cancel = Arc::new(Cancel::new());
+    cancel.cancel();
+    let opts = Options {
+        out_dir: dir.join("out").to_string_lossy().to_string(),
+        quiet: true,
+        jobs: 4,
+        cancel: Some(Arc::clone(&cancel)),
+        ..Options::default()
+    };
+
+    let records = run_parallel(&reader, &sigs, &opts).expect("scan");
+    assert!(records.is_empty());
+    assert!(opts.cancelled());
 }

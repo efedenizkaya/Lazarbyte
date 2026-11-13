@@ -91,6 +91,9 @@ pub struct Options {
     /// tree. This is where deleted files come from; without it only the live
     /// catalog is read.
     pub scan_volume: bool,
+    /// Set by the front end to stop the sweep early. Files already written stay
+    /// on disk; the run is reported as incomplete.
+    pub cancel: Option<std::sync::Arc<crate::cancel::Cancel>>,
 }
 
 impl Default for Options {
@@ -101,6 +104,7 @@ impl Default for Options {
             include_live: false,
             min_size: 0,
             scan_volume: true,
+            cancel: None,
         }
     }
 }
@@ -373,11 +377,15 @@ impl<'a> Volume<'a> {
         live: &HashSet<u64>,
         names: &mut HashMap<u64, (String, u64)>,
         found: &mut Vec<Entry>,
+        cancel: Option<&crate::cancel::Cancel>,
     ) {
         let mut seen: HashSet<(u64, u64)> = HashSet::new();
         let step: usize = 8 << 20;
         let mut pos = 0u64;
         while pos < self.volume_size {
+            if cancel.is_some_and(|c| c.is_cancelled()) {
+                break;
+            }
             let buf = self.src.pread(self.base + pos, step + node_size);
             if buf.len() < 14 {
                 break;
@@ -515,6 +523,9 @@ pub fn recover(
     let mut names: HashMap<u64, (String, u64)> = HashMap::new();
     let mut found: Vec<Entry> = Vec::new();
     for n in 0..catalog.len() / node_size {
+        if crate::cancel::requested(opts.cancel.as_ref()) {
+            break;
+        }
         let node = &catalog[n * node_size..(n + 1) * node_size];
         vol.scan_node(node, &mut names, &mut found);
     }
@@ -524,7 +535,13 @@ pub fn recover(
     let live_cnids: HashSet<u64> = found.iter().filter(|e| e.in_tree).map(|e| e.cnid).collect();
     if opts.scan_volume {
         let mut elsewhere: Vec<Entry> = Vec::new();
-        vol.scan_volume(node_size, &live_cnids, &mut names, &mut elsewhere);
+        vol.scan_volume(
+            node_size,
+            &live_cnids,
+            &mut names,
+            &mut elsewhere,
+            opts.cancel.as_deref(),
+        );
         found.extend(elsewhere);
     }
     let paths = build_paths(&names);
@@ -535,6 +552,9 @@ pub fn recover(
     // says where it came from should be the one reported.
     found.sort_by_key(|e| e.in_tree);
     for entry in found {
+        if crate::cancel::requested(opts.cancel.as_ref()) {
+            break;
+        }
         let is_deleted = !entry.in_tree && !live_cnids.contains(&entry.cnid);
         if !is_deleted && !opts.include_live {
             continue;

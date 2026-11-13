@@ -1029,6 +1029,10 @@ fn run() -> Result<ExitCode, String> {
     let read_error = reader.take_read_error();
     let stop_reason = if read_error.is_some() {
         Some("read_error")
+    } else if opts.cancelled() {
+        // The front end asked to stop. What was written stays; the manifest has
+        // to say the inventory is partial.
+        Some("cancelled")
     } else if budget.stopped_by_free_space() {
         Some("free_space")
     } else if budget.stopped_by_limit() {
@@ -1071,6 +1075,8 @@ fn run() -> Result<ExitCode, String> {
                  only what was written",
                 match reason {
                     "read_error" => "an image read failed; the image is damaged or truncated and the rest was not scanned".to_string(),
+                    "cancelled" =>
+                        "the scan was cancelled; nothing after that point was examined".to_string(),
                     "free_space" =>
                         format!("free space fell to the {} floor", human(opts.min_free)),
                     _ => format!("at the {} output limit", human(opts.max_output)),
@@ -1188,6 +1194,7 @@ fn run_fat(
         dry_run: opts.dry_run,
         include_live,
         min_size: opts.min_size,
+        cancel: opts.cancel.clone(),
     };
     let (records, kind, cluster_size) = fat::recover(reader, opts.start, &fopts, |rec| {
         if machine {
@@ -1327,6 +1334,7 @@ fn run_ext4(
         dry_run: opts.dry_run,
         include_live,
         min_size: opts.min_size,
+        cancel: opts.cancel.clone(),
     };
     let (records, summary) = ext4::recover(reader, opts.start, &eopts, |rec| {
         if machine {
@@ -1463,6 +1471,7 @@ fn run_hfs(
         include_live,
         min_size: opts.min_size,
         scan_volume: true,
+        cancel: opts.cancel.clone(),
     };
     let (records, summary) = hfs::recover(reader, opts.start, &hopts, |rec| {
         if machine {
@@ -1589,6 +1598,7 @@ fn run_apfs(
         out_dir: opts.out_dir.clone(),
         dry_run: opts.dry_run,
         min_size: opts.min_size,
+        cancel: opts.cancel.clone(),
     };
     let (records, summary) = apfs::recover(reader, opts.start, &aopts, |rec| {
         if machine {
@@ -1960,6 +1970,7 @@ fn recover_one(
                 include_live,
                 min_size: opts.min_size,
                 only_path: None,
+                cancel: opts.cancel.clone(),
             };
             for r in ntfs::recover(reader, base, &o, |_| {})? {
                 let confidence = r.confidence();
@@ -1988,6 +1999,7 @@ fn recover_one(
                 dry_run: opts.dry_run,
                 include_live,
                 min_size: opts.min_size,
+                cancel: opts.cancel.clone(),
             };
             let (records, kind, _cluster) = fat::recover(reader, base, &o, |_| {})?;
             for r in records {
@@ -2017,6 +2029,7 @@ fn recover_one(
                 dry_run: opts.dry_run,
                 include_live,
                 min_size: opts.min_size,
+                cancel: opts.cancel.clone(),
             };
             let (records, _summary) = ext4::recover(reader, base, &o, |_| {})?;
             for r in records {
@@ -2047,6 +2060,7 @@ fn recover_one(
                 include_live,
                 min_size: opts.min_size,
                 scan_volume: true,
+                cancel: opts.cancel.clone(),
             };
             let (records, _summary) = hfs::recover(reader, base, &o, |_| {})?;
             for r in records {
@@ -2075,6 +2089,7 @@ fn recover_one(
                 out_dir: out_dir.to_string(),
                 dry_run: opts.dry_run,
                 min_size: opts.min_size,
+                cancel: opts.cancel.clone(),
             };
             let (records, _summary) = apfs::recover(reader, base, &o, |_| {})?;
             for r in records {
@@ -2481,6 +2496,7 @@ fn run_ntfs(
         include_live,
         min_size: opts.min_size,
         only_path,
+        cancel: opts.cancel.clone(),
     };
     let started = Instant::now();
     let quiet = opts.quiet;

@@ -4,6 +4,7 @@
 //! a header straddling a chunk boundary is still found. Candidate offsets come
 //! from one Aho-Corasick pass (SIMD prefilter) over each chunk.
 
+use crate::cancel;
 use crate::handlers::Carve;
 use crate::reader::Source;
 use crate::signatures::Signature;
@@ -251,6 +252,9 @@ pub struct Options {
     /// anything larger is written without a decode, so its record cannot say
     /// it was verified -- only what the structure walk found.
     pub max_validate: u64,
+    /// Set by the front end to stop the scan early. Whatever was carved stays
+    /// on disk; the run is reported as incomplete.
+    pub cancel: Option<Arc<cancel::Cancel>>,
 }
 
 impl Default for Options {
@@ -276,11 +280,17 @@ impl Default for Options {
             validate: false,
             drop_failed: false,
             max_validate: crate::validate::MAX_VALIDATE,
+            cancel: None,
         }
     }
 }
 
 impl Options {
+    /// Has the caller asked this scan to stop?
+    pub fn cancelled(&self) -> bool {
+        cancel::requested(self.cancel.as_ref())
+    }
+
     /// Profile for a phone: a smaller scan chunk and fewer workers, because
     /// resident memory is roughly `jobs * chunk_size` and a mid-range Android
     /// device kills an app that holds tens of megabytes per worker. Validation
@@ -393,6 +403,9 @@ impl<'a> Carver<'a> {
 
     /// True once the scan should stop writing.
     pub fn stopped(&self) -> bool {
+        if self.opts.cancelled() {
+            return true;
+        }
         if let Some(b) = self.budget {
             return b.exhausted();
         }
@@ -765,7 +778,7 @@ pub fn run_ranges_with_budget(
             handles.push(scope.spawn(move || {
                 let mut mine: Vec<Record> = Vec::new();
                 loop {
-                    if budget.exhausted() {
+                    if budget.exhausted() || opts.cancelled() {
                         break;
                     }
                     let i = next.fetch_add(1, Ordering::Relaxed) as usize;
@@ -785,11 +798,14 @@ pub fn run_ranges_with_budget(
                         c = c.with_progress(p);
                     }
                     let recs = c.run();
-                    if !budget.exhausted() {
+                    if !budget.exhausted() && !opts.cancelled() {
                         // The records go out with the range that produced them,
                         // so a run that is killed still leaves a record of what
                         // it found: a manifest written only at the end means a
                         // killed scan leaves files nobody can account for.
+                        // A range stopped by the budget or the cancel flag is
+                        // not recorded as done: the next run has to scan it
+                        // again, or its tail would never be examined.
                         if let Ok(mut f) = done.lock() {
                             f(start, end, &recs);
                         }
@@ -865,7 +881,7 @@ pub fn run_parallel_with_budget(
         let mut handles = Vec::new();
         for j in 0..jobs {
             let range_start = opts.start + span * j as u64;
-            if range_start >= scan_end {
+            if range_start >= scan_end || opts.cancelled() {
                 break;
             }
             let range_len = span.min(scan_end - range_start);
