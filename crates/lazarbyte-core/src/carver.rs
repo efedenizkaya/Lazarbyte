@@ -305,22 +305,31 @@ pub struct Carver<'a> {
     /// Budget for a carver used on its own, so the limit holds however the
     /// scan engine is entered.
     owned_budget: Option<OutputBudget>,
-    matcher: AhoCorasick,
-    /// pattern index -> signatures owning that magic
-    by_pattern: Vec<Vec<&'static Signature>>,
-    pattern_len: Vec<usize>,
+    automaton: Arc<Automaton>,
     pub rejected: u64,
     pub skipped_blank: u64,
     window_end: u64,
 }
 
-impl<'a> Carver<'a> {
-    pub fn new(reader: &'a Source, sigs: Vec<&'static Signature>, opts: &'a Options) -> Self {
+/// The signature matcher, built once and shared by every worker and range.
+///
+/// A scan can run tens of thousands of ranges; building the automaton per
+/// range was measurable on a real volume, and it is the one part of a carver
+/// that can fail.
+struct Automaton {
+    matcher: AhoCorasick,
+    /// pattern index -> signatures owning that magic
+    by_pattern: Vec<Vec<&'static Signature>>,
+    pattern_len: Vec<usize>,
+}
+
+impl Automaton {
+    fn build(sigs: &[&'static Signature]) -> Result<Self, String> {
         // One pattern per distinct magic; longest match wins so the most
         // specific magic is preferred, matching the Python alternation order.
         let mut patterns: Vec<Vec<u8>> = Vec::new();
         let mut by_pattern: Vec<Vec<&'static Signature>> = Vec::new();
-        for sig in &sigs {
+        for sig in sigs {
             for magic in sig.magics {
                 let m = magic.to_vec();
                 match patterns.iter().position(|p| *p == m) {
@@ -336,7 +345,26 @@ impl<'a> Carver<'a> {
         let matcher = AhoCorasick::builder()
             .match_kind(MatchKind::LeftmostLongest)
             .build(&patterns)
-            .expect("signature magics build an automaton");
+            .map_err(|e| format!("cannot build the signature matcher: {e}"))?;
+        Ok(Automaton {
+            matcher,
+            by_pattern,
+            pattern_len,
+        })
+    }
+}
+
+impl<'a> Carver<'a> {
+    pub fn new(
+        reader: &'a Source,
+        sigs: Vec<&'static Signature>,
+        opts: &'a Options,
+    ) -> Result<Self, String> {
+        let automaton = Arc::new(Automaton::build(&sigs)?);
+        Ok(Self::with_automaton(reader, opts, automaton))
+    }
+
+    fn with_automaton(reader: &'a Source, opts: &'a Options, automaton: Arc<Automaton>) -> Self {
         Carver {
             reader,
             progress: None,
@@ -344,9 +372,7 @@ impl<'a> Carver<'a> {
             budget: None,
             owned_budget: (opts.max_output > 0 || (opts.min_free > 0 && opts.free_space.is_some()))
                 .then(|| OutputBudget::for_options(opts)),
-            matcher,
-            by_pattern,
-            pattern_len,
+            automaton,
             rejected: 0,
             skipped_blank: 0,
             window_end: 0,
@@ -389,7 +415,15 @@ impl<'a> Carver<'a> {
         } else {
             scan_end
         };
-        let overlap = self.pattern_len.iter().copied().max().unwrap_or(1) as u64 - 1 + 4;
+        let overlap = self
+            .automaton
+            .pattern_len
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(1) as u64
+            - 1
+            + 4;
         let mut pos = o.start;
         let mut next_allowed = o.start;
 
@@ -415,6 +449,7 @@ impl<'a> Carver<'a> {
             // Collect the chunk's candidate offsets before carving: carving
             // needs &mut self, and the match iterator borrows the automaton.
             let hits: Vec<(u64, usize)> = self
+                .automaton
                 .matcher
                 .find_iter(&buf)
                 .map(|m| (m.start() as u64, m.pattern().as_usize()))
@@ -427,7 +462,7 @@ impl<'a> Carver<'a> {
                     break;
                 }
                 let abs_magic = pos + i;
-                for sig in self.by_pattern[pat].clone() {
+                for sig in self.automaton.by_pattern[pat].clone() {
                     if abs_magic < sig.header_offset {
                         continue;
                     }
@@ -679,7 +714,7 @@ pub fn run_ranges(
     scan_end: u64,
     progress: Option<&Progress>,
     on_range_done: impl FnMut(u64, u64, &[Record]) + Send,
-) -> Vec<Record> {
+) -> Result<Vec<Record>, String> {
     let budget = OutputBudget::for_options(opts);
     run_ranges_with_budget(
         reader,
@@ -705,7 +740,8 @@ pub fn run_ranges_with_budget(
     scan_end: u64,
     progress: Option<&Progress>,
     on_range_done: impl FnMut(u64, u64, &[Record]) + Send,
-) -> Vec<Record> {
+) -> Result<Vec<Record>, String> {
+    let automaton = Arc::new(Automaton::build(sigs)?);
     // Ranges finish at different times, and one that finished should be
     // recorded then rather than when the slowest of its batch does: a live scan
     // of a 237 GB image had recorded nothing after sixteen hours because a whole
@@ -717,16 +753,16 @@ pub fn run_ranges_with_budget(
     // A queue rather than fixed batches. Free-space ranges vary from a few KiB
     // to tens of gigabytes, and with batches every worker waited for the
     // slowest in its group -- on a fragmented volume that is most of the time
-    // spent idle. Long-lived workers also build the pattern automaton once
-    // instead of once per range, which matters when there are 46,774 of them.
+    // spent idle.
     let next = AtomicU64::new(0);
-    std::thread::scope(|scope| {
+    std::thread::scope(|scope| -> Result<(), String> {
+        let mut handles = Vec::new();
         for _ in 0..jobs {
             let next = &next;
             let done = &on_range_done;
             let collected = &collected;
-            let sigs = sigs.to_vec();
-            scope.spawn(move || {
+            let automaton = Arc::clone(&automaton);
+            handles.push(scope.spawn(move || {
                 let mut mine: Vec<Record> = Vec::new();
                 loop {
                     if budget.exhausted() {
@@ -743,7 +779,8 @@ pub fn run_ranges_with_budget(
                     sub.quiet = true;
                     sub.dedup = false; // one dedup pass over the merged result
                     sub.jobs = 1;
-                    let mut c = Carver::new(reader, sigs.clone(), &sub).with_budget(budget);
+                    let mut c = Carver::with_automaton(reader, &sub, Arc::clone(&automaton))
+                        .with_budget(budget);
                     if let Some(p) = progress {
                         c = c.with_progress(p);
                     }
@@ -762,19 +799,37 @@ pub fn run_ranges_with_budget(
                 if let Ok(mut all) = collected.lock() {
                     all.extend(mine);
                 }
-            });
+            }));
         }
-    });
+        join_workers(handles).map(|_| ())
+    })?;
 
     let out = collected.into_inner().unwrap_or_default();
     let mut out = containment_filter(out);
     if opts.dedup {
         dedupe(&mut out, opts.dry_run);
     }
-    out
+    Ok(out)
 }
 
-pub fn run_parallel(reader: &Source, sigs: &[&'static Signature], opts: &Options) -> Vec<Record> {
+/// Join every scan worker, turning a panicked one into an error instead of a
+/// process abort. Its range is lost; the caller reports the scan incomplete.
+fn join_workers<T>(handles: Vec<std::thread::ScopedJoinHandle<'_, T>>) -> Result<Vec<T>, String> {
+    let mut out = Vec::with_capacity(handles.len());
+    for h in handles {
+        let v = h.join().map_err(|_| {
+            "a scan worker stopped unexpectedly; its range was not finished".to_string()
+        })?;
+        out.push(v);
+    }
+    Ok(out)
+}
+
+pub fn run_parallel(
+    reader: &Source,
+    sigs: &[&'static Signature],
+    opts: &Options,
+) -> Result<Vec<Record>, String> {
     let budget = OutputBudget::for_options(opts);
     run_parallel_with_budget(reader, sigs, opts, &budget)
 }
@@ -786,7 +841,7 @@ pub fn run_parallel_with_budget(
     sigs: &[&'static Signature],
     opts: &Options,
     budget: &OutputBudget,
-) -> Vec<Record> {
+) -> Result<Vec<Record>, String> {
     let scan_end = if opts.length > 0 {
         (opts.start + opts.length).min(reader.size())
     } else {
@@ -794,18 +849,19 @@ pub fn run_parallel_with_budget(
     };
     let total = scan_end.saturating_sub(opts.start);
     let jobs = opts.jobs.max(1);
+    let automaton = Arc::new(Automaton::build(sigs)?);
     if jobs == 1 || total == 0 {
-        let mut c = Carver::new(reader, sigs.to_vec(), opts).with_budget(budget);
+        let mut c = Carver::with_automaton(reader, opts, automaton).with_budget(budget);
         let out = c.run();
         let mut out = containment_filter(out);
         if opts.dedup {
             dedupe(&mut out, opts.dry_run);
         }
-        return out;
+        return Ok(out);
     }
     let span = total / jobs as u64 + 1;
     let mut out: Vec<Record> = Vec::new();
-    std::thread::scope(|scope| {
+    std::thread::scope(|scope| -> Result<(), String> {
         let mut handles = Vec::new();
         for j in 0..jobs {
             let range_start = opts.start + span * j as u64;
@@ -820,21 +876,22 @@ pub fn run_parallel_with_budget(
             sub.quiet = true;
             sub.dedup = false; // one dedup pass over the merged result instead
             sub.jobs = 1;
-            let sigs = sigs.to_vec();
+            let automaton = Arc::clone(&automaton);
             handles.push(scope.spawn(move || {
-                let mut c = Carver::new(reader, sigs, &sub).with_budget(budget);
+                let mut c = Carver::with_automaton(reader, &sub, automaton).with_budget(budget);
                 c.run()
             }));
         }
-        for h in handles {
-            out.extend(h.join().expect("scan worker panicked"));
+        for v in join_workers(handles)? {
+            out.extend(v);
         }
-    });
+        Ok(())
+    })?;
     let mut out = containment_filter(out);
     if opts.dedup {
         dedupe(&mut out, opts.dry_run);
     }
-    out
+    Ok(out)
 }
 
 #[cfg(test)]

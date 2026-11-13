@@ -212,7 +212,7 @@ fn carve_with(
         ..Default::default()
     };
     let sigs = resolve_types("docx,zip").unwrap();
-    let records = Carver::new(&src, sigs, &opts).run();
+    let records = Carver::new(&src, sigs, &opts).expect("signatures").run();
     (records, dir)
 }
 

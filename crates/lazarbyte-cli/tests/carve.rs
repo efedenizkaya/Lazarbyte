@@ -80,7 +80,7 @@ fn carve_all(source: &Path, out: PathBuf, tune: impl FnOnce(&mut Options)) -> Ve
     tune(&mut opts);
     let reader = Source::open(source.to_str().unwrap()).unwrap();
     let sigs: Vec<_> = SIGNATURES.iter().collect();
-    let mut c = Carver::new(&reader, sigs, &opts);
+    let mut c = Carver::new(&reader, sigs, &opts).expect("signatures");
     c.run()
 }
 
@@ -239,7 +239,7 @@ fn parallel_scan_matches_serial() {
             quiet: true,
             ..Options::default()
         };
-        let mut c = Carver::new(&reader, sigs.clone(), &opts);
+        let mut c = Carver::new(&reader, sigs.clone(), &opts).expect("signatures");
         c.run()
     };
     let parallel = {
@@ -250,7 +250,7 @@ fn parallel_scan_matches_serial() {
             chunk_size: 1 << 16,
             ..Options::default()
         };
-        run_parallel(&reader, &sigs, &opts)
+        run_parallel(&reader, &sigs, &opts).expect("scan")
     };
     let key = |rs: &[Record]| {
         let mut v: Vec<(u64, u64, String)> = rs
@@ -599,7 +599,7 @@ fn parallel_ranges_do_not_report_files_inside_a_validated_carve() {
             quiet: true,
             ..Options::default()
         };
-        run_parallel(&reader, &sigs, &opts)
+        run_parallel(&reader, &sigs, &opts).expect("scan")
     };
     let parallel = {
         let opts = Options {
@@ -609,7 +609,7 @@ fn parallel_ranges_do_not_report_files_inside_a_validated_carve() {
             chunk_size: 1 << 12,
             ..Options::default()
         };
-        run_parallel(&reader, &sigs, &opts)
+        run_parallel(&reader, &sigs, &opts).expect("scan")
     };
     assert_eq!(
         key(&serial),
@@ -792,7 +792,7 @@ fn the_budget_is_shared_across_workers() {
         max_output: 512,
         ..Options::default()
     };
-    let records = run_parallel(&reader, &sigs, &opts);
+    let records = run_parallel(&reader, &sigs, &opts).expect("scan");
     let written: u64 = records
         .iter()
         .filter(|r| !r.path.is_empty())

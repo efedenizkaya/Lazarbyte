@@ -184,7 +184,7 @@ fn source_routes_e01_to_the_ewf_reader_and_carves_it() {
         quiet: true,
         ..Options::default()
     };
-    let mut c = Carver::new(&src, SIGNATURES.iter().collect(), &opts);
+    let mut c = Carver::new(&src, SIGNATURES.iter().collect(), &opts).expect("signatures");
     let records = c.run();
     let carved: Vec<_> = records.iter().filter(|r| r.ext == "png").collect();
     assert_eq!(carved.len(), 1, "png not recovered through EWF");

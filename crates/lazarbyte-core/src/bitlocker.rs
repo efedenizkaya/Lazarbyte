@@ -469,12 +469,19 @@ pub fn recover_fvek_candidates(
 
 // ------------------------------------------------------------ volume cipher
 
+/// How sectors are encrypted. The second key only exists for the two-key
+/// methods, and keeping it inside the variant is what lets the decrypt paths
+/// use it without an `Option` to unwrap.
+enum Scheme {
+    Xts { tweak: Aes },
+    Cbc,
+    CbcDiffuser { key: Aes },
+}
+
 /// Sector-level decrypt for one FVE encryption method.
 pub struct Cipher {
-    xts: bool,
-    diffuser: bool,
     aes1: Aes,
-    aes2: Option<Aes>,
+    scheme: Scheme,
 }
 
 impl Cipher {
@@ -500,63 +507,56 @@ impl Cipher {
         } else {
             None
         };
-        Ok(Cipher {
-            xts,
-            diffuser,
-            aes1,
-            aes2,
-        })
+        let scheme = match aes2 {
+            Some(tweak) if xts => Scheme::Xts { tweak },
+            Some(key) if diffuser => Scheme::CbcDiffuser { key },
+            _ => Scheme::Cbc,
+        };
+        Ok(Cipher { aes1, scheme })
     }
 
-    fn sector_key(&self, sector_no: u64, size: usize) -> Vec<u8> {
-        let aes2 = self.aes2.as_ref().expect("diffuser needs the second key");
+    fn sector_key(&self, key: &Aes, sector_no: u64, size: usize) -> Vec<u8> {
         let mut b = [0u8; 16];
         b[..8].copy_from_slice(&sector_no.to_le_bytes());
-        let mut k = aes2.encrypt(&b).to_vec();
+        let mut k = key.encrypt(&b).to_vec();
         b[15] = 0x80;
-        k.extend_from_slice(&aes2.encrypt(&b));
+        k.extend_from_slice(&key.encrypt(&b));
         k.iter().copied().cycle().take(size).collect()
     }
 
     pub fn decrypt_sector(&self, sector_no: u64, data: &[u8]) -> Vec<u8> {
-        if self.xts {
-            return crypto::xts_decrypt(
-                &self.aes1,
-                self.aes2.as_ref().expect("xts needs the tweak key"),
-                sector_no,
-                data,
-            );
+        if let Scheme::Xts { tweak } = &self.scheme {
+            return crypto::xts_decrypt(&self.aes1, tweak, sector_no, data);
         }
         let mut ivb = [0u8; 16];
         ivb[..8].copy_from_slice(&sector_no.to_le_bytes());
         let iv = self.aes1.encrypt(&ivb);
         let plain = crypto::cbc_decrypt(&self.aes1, &iv, data);
-        if !self.diffuser {
-            return plain;
+        match &self.scheme {
+            Scheme::CbcDiffuser { key } => {
+                let sk = self.sector_key(key, sector_no, plain.len());
+                crypto::diffuser_decrypt(&plain, &sk)
+            }
+            _ => plain,
         }
-        let sk = self.sector_key(sector_no, plain.len());
-        crypto::diffuser_decrypt(&plain, &sk)
     }
 
     /// Inverse of decrypt_sector. Only used to build test volumes.
     pub fn encrypt_sector(&self, sector_no: u64, data: &[u8]) -> Vec<u8> {
-        if self.xts {
-            return crypto::xts_encrypt(
-                &self.aes1,
-                self.aes2.as_ref().expect("xts needs the tweak key"),
-                sector_no,
-                data,
-            );
+        if let Scheme::Xts { tweak } = &self.scheme {
+            return crypto::xts_encrypt(&self.aes1, tweak, sector_no, data);
         }
         let mut ivb = [0u8; 16];
         ivb[..8].copy_from_slice(&sector_no.to_le_bytes());
         let iv = self.aes1.encrypt(&ivb);
-        if !self.diffuser {
-            return crypto::cbc_encrypt(&self.aes1, &iv, data);
+        match &self.scheme {
+            Scheme::CbcDiffuser { key } => {
+                let sk = self.sector_key(key, sector_no, data.len());
+                let diffused = crypto::diffuser_encrypt(data, &sk);
+                crypto::cbc_encrypt(&self.aes1, &iv, &diffused)
+            }
+            _ => crypto::cbc_encrypt(&self.aes1, &iv, data),
         }
-        let sk = self.sector_key(sector_no, data.len());
-        let diffused = crypto::diffuser_encrypt(data, &sk);
-        crypto::cbc_encrypt(&self.aes1, &iv, &diffused)
     }
 }
 

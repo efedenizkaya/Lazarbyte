@@ -129,7 +129,7 @@ fn a_resumed_scan_finds_what_one_pass_finds() {
             dry_run: true,
             ..Options::default()
         };
-        run_parallel(&reader, &sigs, &opts)
+        run_parallel(&reader, &sigs, &opts).expect("scan")
     };
 
     // Scan in two halves, as an interrupted run and its resume would.
@@ -144,7 +144,8 @@ fn a_resumed_scan_finds_what_one_pass_finds() {
     let mut done: Vec<(u64, u64)> = Vec::new();
     let mut first = run_ranges(&reader, &sigs, &opts, &[(0, mid)], end, None, |a, b, _| {
         done.push((a, b))
-    });
+    })
+    .expect("scan");
     let second = run_ranges(
         &reader,
         &sigs,
@@ -153,7 +154,8 @@ fn a_resumed_scan_finds_what_one_pass_finds() {
         end,
         None,
         |a, b, _| done.push((a, b)),
-    );
+    )
+    .expect("scan");
     first.extend(second);
     assert_eq!(done, vec![(0, mid), (mid, end)]);
     assert_eq!(

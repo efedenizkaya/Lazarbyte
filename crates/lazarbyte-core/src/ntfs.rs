@@ -674,8 +674,13 @@ fn build_paths(infos: &HashMap<u64, PathInfo>) -> HashMap<u64, String> {
             return "_deep_".into(); // a parent cycle in a damaged MFT
         }
         let path = match infos.get(&num) {
-            Some(info) if !info.name.is_empty() && info.parent.is_some() => {
-                let parent_num = info.parent.unwrap();
+            Some(info) if !info.name.is_empty() => {
+                let Some(parent_num) = info.parent else {
+                    // A name with no parent record: the file is real, its place
+                    // in the tree is not recoverable.
+                    cache.insert(num, "_orphan_".into());
+                    return "_orphan_".into();
+                };
                 // A deleted file names its parent by record number *and*
                 // sequence. NTFS bumps the sequence every time it reuses a
                 // record, so a mismatch means that record now holds a different

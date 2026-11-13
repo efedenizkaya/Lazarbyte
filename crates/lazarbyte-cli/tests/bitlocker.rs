@@ -45,7 +45,7 @@ fn carve_unlocked(image: &Path, creds: &Credentials, tag: &str) -> Vec<(u64, u64
         dry_run: true,
         ..Options::default()
     };
-    let mut c = Carver::new(&src, SIGNATURES.iter().collect(), &opts);
+    let mut c = Carver::new(&src, SIGNATURES.iter().collect(), &opts).expect("signatures");
     let mut recs: Vec<(u64, u64, String)> = c
         .run()
         .into_iter()
@@ -191,7 +191,8 @@ fn a_raw_fvek_skips_key_recovery_and_gives_the_same_bytes() {
                     dry_run: true,
                     ..Options::default()
                 };
-                let mut c = Carver::new(&unlocked, SIGNATURES.iter().collect(), &opts);
+                let mut c =
+                    Carver::new(&unlocked, SIGNATURES.iter().collect(), &opts).expect("signatures");
                 let mut recs: Vec<(u64, u64, String)> = c
                     .run()
                     .into_iter()

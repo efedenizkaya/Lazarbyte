@@ -140,7 +140,7 @@ fn carve_custom(sig_json: &[u8], image: &[u8], tag: &str) -> Vec<lazarbyte_core:
         dry_run: true, // the records are what is being checked
         ..Default::default()
     };
-    Carver::new(&src, sigs, &opts).run()
+    Carver::new(&src, sigs, &opts).expect("signatures").run()
 }
 
 #[test]

@@ -1267,7 +1267,9 @@ pub fn carve_mp3(w: &mut Window) -> Option<Carve> {
             }
             break;
         }
-        let (flen, prof) = frame.unwrap();
+        let Some((flen, prof)) = frame else {
+            break;
+        };
         profile = Some(prof);
         if pos + flen > w.limit {
             break; // frame truncated at EOF/limit
@@ -1676,19 +1678,17 @@ pub fn carve_mkv(w: &mut Window) -> Option<Carve> {
     }
     let (seg_size, n2) = ebml_vint(w, pos + 4);
     pos += 4 + n2;
-    let unknown = match seg_size {
-        None => true,
-        Some(s) => s >= (1u64 << (7 * n2)) - 1,
-    };
     let ext = if w.find(b"webm", 0, Some(64)).is_some() {
         "webm"
     } else {
         "mkv"
     };
-    if unknown {
-        return carve(w.limit.min(256 << 20), ext, false); // live stream: no size
-    }
-    let end = pos + seg_size.unwrap();
+    // An absent or all-ones vint means the segment length is unknown: a live
+    // stream or a file still being written. Bound it, and say it is unverified.
+    let Some(seg_size) = seg_size.filter(|&s| s < (1u64 << (7 * n2)) - 1) else {
+        return carve(w.limit.min(256 << 20), ext, false);
+    };
+    let end = pos + seg_size;
     if end > w.limit {
         return None;
     }

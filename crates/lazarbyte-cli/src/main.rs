@@ -891,8 +891,8 @@ fn run() -> Result<ExitCode, String> {
                 scan_end,
                 Some(&progress),
                 |_, _, _| {},
-            ),
-            None => run_parallel_with_budget(&reader, &sigs, &opts, &budget),
+            )?,
+            None => run_parallel_with_budget(&reader, &sigs, &opts, &budget)?,
         }
     } else {
         let fingerprint = checkpoint::Fingerprint {
@@ -922,7 +922,7 @@ fn run() -> Result<ExitCode, String> {
                 ranges.len()
             );
         }
-        let recs = std::thread::scope(|scope| {
+        let recs = std::thread::scope(|scope| -> Result<Vec<Record>, String> {
             if show_progress {
                 spawn_reporter(&progress, &stop_reporting, machine, scope);
             }
@@ -938,10 +938,10 @@ fn run() -> Result<ExitCode, String> {
                     stream_records(&mut stream, recs);
                     state.complete(a, b);
                 },
-            );
+            )?;
             stop_reporting.store(true, std::sync::atomic::Ordering::Relaxed);
-            recs
-        });
+            Ok(recs)
+        })?;
         // With --unallocated the allocated ranges are never going to be
         // scanned, so completeness is measured against what was planned rather
         // than against the whole volume -- otherwise every run ends by telling

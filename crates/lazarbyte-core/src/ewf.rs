@@ -268,14 +268,21 @@ impl EwfReader {
                     b"hash" => {
                         let body = self.read_at(sidx, data_off, 16);
                         if body.len() == 16 && self.stored_hashes.md5.is_none() {
-                            self.stored_hashes.md5 = Some(body.try_into().unwrap());
+                            let mut md5 = [0u8; 16];
+                            md5.copy_from_slice(&body);
+                            self.stored_hashes.md5 = Some(md5);
                         }
                     }
                     b"digest" => {
                         let body = self.read_at(sidx, data_off, 36);
                         if body.len() == 36 {
-                            self.stored_hashes.md5 = Some(body[..16].try_into().unwrap());
-                            self.stored_hashes.sha1 = Some(body[16..36].try_into().unwrap());
+                            let (md5, sha1) = body.split_at(16);
+                            let mut m = [0u8; 16];
+                            m.copy_from_slice(md5);
+                            let mut s = [0u8; 20];
+                            s.copy_from_slice(sha1);
+                            self.stored_hashes.md5 = Some(m);
+                            self.stored_hashes.sha1 = Some(s);
                         }
                     }
                     _ => {}
@@ -299,8 +306,8 @@ impl EwfReader {
             let last = self
                 .segments
                 .last()
-                .unwrap()
-                .file_name()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().to_string())
                 .unwrap_or_default();
             return Err(err(format!(
                 "incomplete EWF set: {} segment(s) hold {have} of {declared_chunks} \
@@ -308,7 +315,7 @@ impl EwfReader {
                  segments are missing or misnamed.",
                 self.segments.len(),
                 100.0 * have as f64 / declared_chunks as f64,
-                last.to_string_lossy(),
+                last,
             )));
         }
 
