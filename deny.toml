@@ -14,7 +14,12 @@ all-features = true
 [advisories]
 # RustSec advisories fail the build. Ignore an advisory only with a written
 # reason and an expiry note in THIRD_PARTY_LICENSES.md.
-ignore = []
+ignore = [
+    # Dev tooling only: uniffi-bindgen -> askama -> basic-toml. Nothing links
+    # it into the runtime library or the app. Re-check when uniffi drops the
+    # dependency or at the Faz 8 packaging review, whichever comes first.
+    { id = "RUSTSEC-2026-0374", reason = "unmaintained, but only reachable through the binding generator" },
+]
 
 [licenses]
 # Project allow-list: permissive licenses only. MPL-2.0 is handled below as a
@@ -28,6 +33,11 @@ allow = [
     "MIT",
     "Unlicense",
     "Zlib",
+    # Owner-approved with the Faz 4 uniffi adoption: uniffi's proc-macro chain
+    # (proc-macro2 -> unicode-ident) carries this license and there is no way
+    # to build the bridge without it. OSI-approved, permissive; rationale in
+    # THIRD_PARTY_LICENSES.md.
+    "Unicode-3.0",
 ]
 confidence-threshold = 0.8
 # The allow-list is a standing policy list, not a snapshot of today's graph:

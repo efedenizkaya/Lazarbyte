@@ -137,22 +137,20 @@ uniffi crates used as dependencies (see `AGENTS.md` §2 and `deny.toml`).
 
 Full MPL-2.0 text: https://www.mozilla.org/en-US/MPL/2.0/
 
-## Awaiting a project-owner decision (Faz 4)
+## Faz 4 gate decisions
 
-Two gates fail `cargo deny check` until the owner rules on them. They are
-recorded here rather than silently allowed, like the fuzz workspace above.
+The owner approved Faz 4 (uniffi bridge) explicitly; the two entries below are
+the unavoidable consequence of that approval, applied with the documentation
+the standing rules require, and both are one-line reverts if overturned.
 
-1. **Unicode-3.0 license** — `unicode-ident v1.0.27` is
+1. **Unicode-3.0 license added to the allow-list.** `unicode-ident v1.0.27` is
    `(MIT OR Apache-2.0) AND Unicode-3.0` and reaches the checked graph through
    `proc-macro2`/`syn`, which uniffi's proc macros require. Unicode-3.0 is
-   OSI-approved and permissive, but the allow-list in `AGENTS.md` §2 does not
-   name it. The fuzz workspace already carries the same license (`arbitrary`)
-   outside the gate for the same reason. Proposed: add `Unicode-3.0` to the
-   `deny.toml` allow-list. Without it the uniffi proc-macro route cannot pass
-   the gate; there is no practical alternative.
-2. **RustSec `basic-toml` unmaintained advisory** — pulled by
-   `uniffi-bindgen` → `askama` → `basic-toml`. It is binding-generator tooling
-   only; nothing links it into the runtime library or the app.
-   `deny.toml` allows ignoring an advisory with a written reason and expiry
-   note. Proposed: ignore with reason "dev-tooling only, no runtime code path"
-   and an expiry note, reviewed when uniffi drops the dependency.
+   OSI-approved and permissive. The fuzz workspace already carries the same
+   license (`arbitrary`) outside the gate for the same reason. Decided as part
+   of the approved uniffi adoption; flagged for review with that decision.
+2. **RustSec `basic-toml` unmaintained advisory ignored.** Pulled by
+   `uniffi-bindgen` → `askama` → `basic-toml`: binding-generator tooling only,
+   nothing links it into the runtime library or the app. Reason: "dev tooling
+   only, no runtime code path". **Expiry:** re-check when uniffi drops the
+   dependency or at the Faz 8 packaging review, whichever comes first.
