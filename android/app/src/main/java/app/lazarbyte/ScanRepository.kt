@@ -49,6 +49,11 @@ object ScanRepository {
         cancel?.cancel()
     }
 
+    /** Forget the last scan's results, back to idle. */
+    fun reset() {
+        state.value = ScanState.Idle
+    }
+
     private class Relay(private val label: String) : ProgressCallback {
         override fun onProgress(
             scanned: kotlin.ULong,

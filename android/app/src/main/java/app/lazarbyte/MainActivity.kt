@@ -47,6 +47,31 @@ class MainActivity : ComponentActivity() {
             openSource(uri)
         }
 
+    /**
+     * Exporting a recovered file: the user names a destination through SAF
+     * and the file's bytes are copied there. One document per export; the
+     * bytes come from the app's private storage, where the scan wrote them.
+     */
+    private var pendingExport: RecoveredItem? = null
+    private val exportFile =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri: Uri? ->
+            val item = pendingExport
+            pendingExport = null
+            if (uri != null && item != null) {
+                exportTo(uri, item)
+            }
+        }
+
+    private fun exportTo(uri: Uri, item: RecoveredItem) {
+        runCatching {
+            contentResolver.openOutputStream(uri, "w")?.use { out ->
+                File(item.path).inputStream().use { it.copyTo(out) }
+            } ?: throw IllegalStateException("destination not writable")
+        }.onFailure {
+            sourceError = "Export failed: ${it.message ?: it.javaClass.simpleName}"
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
@@ -134,10 +159,16 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 is ScanState.Done -> {
-                    Text(
-                        "${s.items.size} files recovered (results below).",
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+                    androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxSize()) {
+                        ResultsScreen(
+                            items = s.items,
+                            onExport = { item ->
+                                pendingExport = item
+                                exportFile.launch(item.name)
+                            },
+                            onClear = { ScanRepository.reset() },
+                        )
+                    }
                 }
                 is ScanState.Failed -> {
                     Text(
