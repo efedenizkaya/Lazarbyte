@@ -92,5 +92,36 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.74.0
+      - uses: dtolnay/rust-toolchain@1.91.0
       - run: cargo build
+
+  android:
+    # Faz 5: the bridge has to keep building for Android, and its libraries
+    # must stay 16 KB load-aligned (the Play Store requirement for apps
+    # targeting Android 15+). The smoke run itself needs an emulator, so only
+    # the build is checked here; scripts/android-smoke.sh is the manual test.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, x86_64-linux-android
+      # A pinned NDK keeps the 16 KB alignment deterministic: r28+ aligns by
+      # default, an older one would build 4 KB libraries and fail the check.
+      - name: Install a pinned NDK
+        run: "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager \"ndk;29.0.14206865\""
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - name: Build both ABIs
+        run: cargo ndk --platform 21 -t arm64-v8a -t x86_64 build --profile android -p lazarbyte-ffi
+      - name: Check 16 KB load alignment
+        run: |
+          for so in \
+            target/aarch64-linux-android/android/liblazarbyte_ffi.so \
+            target/x86_64-linux-android/android/liblazarbyte_ffi.so
+          do
+            align=$(readelf -lW "$so" | awk '/LOAD/ {print $NF}' | sort -u)
+            echo "$so: LOAD alignment $align"
+            test "$align" = "0x4000"
+          done
