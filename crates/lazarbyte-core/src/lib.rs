@@ -44,6 +44,7 @@ pub mod reader;
 pub mod recover;
 pub mod report;
 pub mod signatures;
+pub mod sink;
 pub mod validate;
 pub mod verify;
 pub mod window;

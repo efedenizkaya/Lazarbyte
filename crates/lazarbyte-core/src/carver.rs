@@ -8,13 +8,13 @@ use crate::cancel;
 use crate::handlers::Carve;
 use crate::reader::Source;
 use crate::signatures::Signature;
+use crate::sink::{FsSink, Sink};
 use crate::window::Window;
 use aho_corasick::{AhoCorasick, MatchKind};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
-use std::fs;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 
@@ -255,6 +255,11 @@ pub struct Options {
     /// Set by the front end to stop the scan early. Whatever was carved stays
     /// on disk; the run is reported as incomplete.
     pub cancel: Option<Arc<cancel::Cancel>>,
+    /// Where carved bytes go. `None` writes a directory on the local
+    /// filesystem under `out_dir`, which is what the desktop does; the Android
+    /// bridge supplies a sink that writes through SAF, where a directory has
+    /// no path.
+    pub sink: Option<Arc<dyn Sink>>,
 }
 
 impl Default for Options {
@@ -281,6 +286,7 @@ impl Default for Options {
             drop_failed: false,
             max_validate: crate::validate::MAX_VALIDATE,
             cancel: None,
+            sink: None,
         }
     }
 }
@@ -306,10 +312,20 @@ impl Options {
     }
 }
 
+/// The sink this run writes through: the caller's, or a directory on the local
+/// filesystem under `out_dir`.
+fn sink_for(opts: &Options) -> Arc<dyn Sink> {
+    opts.sink
+        .clone()
+        .unwrap_or_else(|| Arc::new(FsSink::new(opts.out_dir.clone())))
+}
+
 pub struct Carver<'a> {
     reader: &'a Source,
     progress: Option<&'a Progress>,
     opts: &'a Options,
+    /// Where carved bytes go. Built once per scan, not per carve.
+    sink: Arc<dyn Sink>,
     /// Budget shared with the other workers of a parallel scan.
     budget: Option<&'a OutputBudget>,
     /// Budget for a carver used on its own, so the limit holds however the
@@ -379,6 +395,7 @@ impl<'a> Carver<'a> {
             reader,
             progress: None,
             opts,
+            sink: sink_for(opts),
             budget: None,
             owned_budget: (opts.max_output > 0 || (opts.min_free > 0 && opts.free_space.is_some()))
                 .then(|| OutputBudget::for_options(opts)),
@@ -514,7 +531,7 @@ impl<'a> Carver<'a> {
             }
         }
         if o.dedup {
-            dedupe(&mut records, o.dry_run);
+            dedupe(&mut records, o.dry_run, &*self.sink);
         }
         records
     }
@@ -599,17 +616,18 @@ impl<'a> Carver<'a> {
         // Hash while streaming; write as we go unless this is a dry run.
         let mut hasher = Sha256::new();
         let mut path = String::new();
-        let mut file = if o.dry_run {
+        let mut file: Option<Box<dyn Write>> = if o.dry_run {
             None
         } else {
-            let dir = PathBuf::from(&o.out_dir).join(carve.ext);
-            if fs::create_dir_all(&dir).is_err() {
-                return None;
-            }
-            let p = dir.join(format!("f_{:012x}.{}", start, carve.ext));
-            path = p.to_string_lossy().to_string();
-            match fs::File::create(&p) {
-                Ok(f) => Some(std::io::BufWriter::new(f)),
+            // The name the carve engine has always used, relative to the sink:
+            // `png/f_00000000a000.png`. A resumed scan rewrites the same
+            // offset, so this replaces rather than adding a copy.
+            let rel = Path::new(carve.ext).join(format!("f_{:012x}.{}", start, carve.ext));
+            match self.sink.create(&rel) {
+                Ok((w, id)) => {
+                    path = id;
+                    Some(w)
+                }
                 Err(_) => return None,
             }
         };
@@ -669,7 +687,7 @@ impl<'a> Carver<'a> {
 /// starting mid-archive would otherwise report an inner member (a file stored
 /// in a docx, say) as a separate carve. Without this, `-j` and a serial run
 /// disagree on the same image.
-pub fn containment_filter(records: Vec<Record>) -> Vec<Record> {
+pub fn containment_filter(records: Vec<Record>, sink: &dyn Sink) -> Vec<Record> {
     let mut sorted = records;
     sorted.sort_by_key(|r| (r.offset, std::cmp::Reverse(r.size)));
     let mut out: Vec<Record> = Vec::with_capacity(sorted.len());
@@ -677,7 +695,7 @@ pub fn containment_filter(records: Vec<Record>) -> Vec<Record> {
     for rec in sorted {
         if covered_end > 0 && rec.offset + rec.size <= covered_end {
             if !rec.path.is_empty() {
-                let _ = fs::remove_file(&rec.path);
+                sink.remove(&rec.path);
             }
             continue;
         }
@@ -691,7 +709,7 @@ pub fn containment_filter(records: Vec<Record>) -> Vec<Record> {
 
 /// Mark byte-identical carves as duplicates of the first one seen, dropping
 /// the redundant copies from disk.
-pub fn dedupe(records: &mut [Record], dry_run: bool) {
+pub fn dedupe(records: &mut [Record], dry_run: bool, sink: &dyn Sink) {
     let mut first: HashMap<String, u64> = HashMap::new();
     for rec in records.iter_mut() {
         match first.get(&rec.sha256) {
@@ -701,7 +719,7 @@ pub fn dedupe(records: &mut [Record], dry_run: bool) {
             Some(&origin) => {
                 rec.duplicate_of = Some(origin);
                 if !dry_run && !rec.path.is_empty() {
-                    let _ = fs::remove_file(&rec.path);
+                    sink.remove(&rec.path);
                     rec.path = String::new();
                 }
             }
@@ -821,9 +839,9 @@ pub fn run_ranges_with_budget(
     })?;
 
     let out = collected.into_inner().unwrap_or_default();
-    let mut out = containment_filter(out);
+    let mut out = containment_filter(out, &*sink_for(opts));
     if opts.dedup {
-        dedupe(&mut out, opts.dry_run);
+        dedupe(&mut out, opts.dry_run, &*sink_for(opts));
     }
     Ok(out)
 }
@@ -869,9 +887,9 @@ pub fn run_parallel_with_budget(
     if jobs == 1 || total == 0 {
         let mut c = Carver::with_automaton(reader, opts, automaton).with_budget(budget);
         let out = c.run();
-        let mut out = containment_filter(out);
+        let mut out = containment_filter(out, &*sink_for(opts));
         if opts.dedup {
-            dedupe(&mut out, opts.dry_run);
+            dedupe(&mut out, opts.dry_run, &*sink_for(opts));
         }
         return Ok(out);
     }
@@ -903,9 +921,9 @@ pub fn run_parallel_with_budget(
         }
         Ok(())
     })?;
-    let mut out = containment_filter(out);
+    let mut out = containment_filter(out, &*sink_for(opts));
     if opts.dedup {
-        dedupe(&mut out, opts.dry_run);
+        dedupe(&mut out, opts.dry_run, &*sink_for(opts));
     }
     Ok(out)
 }

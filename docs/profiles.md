@@ -82,3 +82,21 @@ What cancellation guarantees:
 
 Nothing is deleted by cancelling: the flag only stops new work.
 
+## Where recovered files go
+
+Carving writes through a sink (`carver::Options::sink`), not through a path.
+`None` means `FsSink` over `out_dir`, which is what the desktop does and what
+the record's `path` field has always held, so manifests do not change.
+
+The Android app cannot name a file: the Storage Access Framework hands out a
+document per file, so the FFI layer supplies a sink that returns the document
+URI as the record's identifier. A sink has three jobs: create-or-replace a
+file (a resumed scan rewrites the same offset, which is what keeps a resume
+from filling the output with copies), create a file that must not replace
+anything (two deleted entries can share a name), and remove one that turned out
+to be a duplicate.
+
+Undelete output (FAT/exFAT and ext so far) still writes to `out_dir` directly;
+moving it onto the sink is the next step.
+
+

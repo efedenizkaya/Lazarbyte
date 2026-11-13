@@ -1142,3 +1142,99 @@ fn a_scan_cancelled_before_it_starts_carves_nothing() {
     assert!(records.is_empty());
     assert!(opts.cancelled());
 }
+
+/// What the in-memory sink holds: the identifier it handed out and the bytes.
+type MemoryFiles = Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
+type SinkOut = std::io::Result<(Box<dyn std::io::Write>, String)>;
+
+/// A sink that keeps everything in memory, standing in for the Android bridge,
+/// which writes through SAF and has no path to write to.
+#[derive(Default)]
+struct MemorySink {
+    files: MemoryFiles,
+}
+
+struct MemWriter {
+    files: MemoryFiles,
+    id: String,
+    buf: Vec<u8>,
+}
+
+impl std::io::Write for MemWriter {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.buf.extend_from_slice(b);
+        Ok(b.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Drop for MemWriter {
+    fn drop(&mut self) {
+        if let Ok(mut files) = self.files.lock() {
+            files.push((self.id.clone(), std::mem::take(&mut self.buf)));
+        }
+    }
+}
+
+impl lazarbyte_core::sink::Sink for MemorySink {
+    fn create(&self, rel: &Path) -> SinkOut {
+        let id = format!("saf:{}", rel.to_string_lossy().replace('\\', "/"));
+        let writer = MemWriter {
+            files: Arc::clone(&self.files),
+            id: id.clone(),
+            buf: Vec::new(),
+        };
+        Ok((Box::new(writer), id))
+    }
+
+    fn create_unique(&self, rel: &Path, _alt: &Path) -> SinkOut {
+        self.create(rel)
+    }
+
+    fn remove(&self, id: &str) {
+        if let Ok(mut files) = self.files.lock() {
+            files.retain(|(fid, _)| fid != id);
+        }
+    }
+}
+
+/// The carve engine must deal in sink identifiers, not paths: the record carries
+/// what the sink returned, and nothing touches the local filesystem.
+#[test]
+fn carved_files_go_through_the_sink() {
+    let dir = Tmp::new("sink");
+    let planted = planted_image(&dir);
+    let reader = Source::open(planted.path.to_str().unwrap()).unwrap();
+    let sigs: Vec<_> = SIGNATURES.iter().collect();
+    let sink = Arc::new(MemorySink::default());
+    let opts = Options {
+        out_dir: dir.join("out").to_string_lossy().to_string(),
+        quiet: true,
+        sink: Some(sink.clone() as Arc<dyn lazarbyte_core::sink::Sink>),
+        ..Options::default()
+    };
+    let mut c = Carver::new(&reader, sigs, &opts).expect("signatures");
+    let records = c.run();
+
+    assert!(!records.is_empty());
+    assert!(
+        !dir.join("out").exists(),
+        "a run with a sink must not write to the filesystem"
+    );
+    let files = sink.files.lock().expect("sink lock");
+    for rec in records.iter().filter(|r| !r.path.is_empty()) {
+        assert!(rec.path.starts_with("saf:"), "{}", rec.path);
+        let (_, body) = files
+            .iter()
+            .find(|(id, _)| *id == rec.path)
+            .unwrap_or_else(|| panic!("sink has no file for {}", rec.path));
+        assert_eq!(
+            format!("{:x}", Sha256::digest(body)),
+            rec.sha256,
+            "the sink holds a different file than the record describes"
+        );
+    }
+}

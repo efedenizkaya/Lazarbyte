@@ -147,6 +147,16 @@ pub enum Source {
 }
 
 impl Source {
+    /// A source from a file the caller already holds, with no path to open.
+    ///
+    /// This is how the Android bridge reads a document chosen through the
+    /// Storage Access Framework: Kotlin wraps the descriptor in a `File` and
+    /// hands it over. Only raw image bytes are accepted -- with no path there
+    /// is no container to recognise, so the caller must know what it opened.
+    pub fn from_file(file: File, name: &str) -> io::Result<Self> {
+        Ok(Source::Raw(Reader::from_file(file, name)?))
+    }
+
     pub fn open(path: &str) -> io::Result<Self> {
         if path == "-" || path == "/dev/stdin" {
             #[cfg(feature = "containers")]
@@ -384,6 +394,40 @@ pub struct Reader {
 }
 
 impl Reader {
+    /// Wrap a file the caller already opened read-only, when there is no path
+    /// to open.
+    ///
+    /// Android hands out a document descriptor for a file chosen through the
+    /// Storage Access Framework, not a path, and a block device is sometimes
+    /// best reached through a descriptor too. `name` is only used in messages
+    /// and in the manifest; it is not opened, and no container is detected from
+    /// it -- the caller is responsible for passing image bytes, not a
+    /// container file.
+    pub fn from_file(mut file: File, name: &str) -> io::Result<Self> {
+        let meta = file.metadata()?;
+        let (size, is_device) = if meta.is_file() {
+            (meta.len(), false)
+        } else {
+            // A descriptor for a block device has no length in its metadata;
+            // it comes from seeking to the end, exactly as for a path.
+            let end = file.seek(SeekFrom::End(0))?;
+            (end, true)
+        };
+        if size == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("cannot determine size of {name:?}"),
+            ));
+        }
+        Ok(Reader {
+            file,
+            size,
+            path: name.to_string(),
+            is_device,
+            err: std::sync::Mutex::new(None),
+        })
+    }
+
     pub fn open(path: &str) -> io::Result<Self> {
         let mut file = File::open(Path::new(path))?;
         let mut head = [0u8; 16];
