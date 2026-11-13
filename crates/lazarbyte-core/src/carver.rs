@@ -863,16 +863,19 @@ pub fn run_parallel(
     opts: &Options,
 ) -> Result<Vec<Record>, String> {
     let budget = OutputBudget::for_options(opts);
-    run_parallel_with_budget(reader, sigs, opts, &budget)
+    run_parallel_with_budget(reader, sigs, opts, &budget, None)
 }
 
 /// `run_parallel` with a caller-owned budget, so the caller can tell afterwards
-/// whether the scan finished or stopped early.
+/// whether the scan finished or stopped early. `progress` reports into the same
+/// counter `run_ranges` shares with its workers; without it the scan runs
+/// uncounted, as before.
 pub fn run_parallel_with_budget(
     reader: &Source,
     sigs: &[&'static Signature],
     opts: &Options,
     budget: &OutputBudget,
+    progress: Option<&Progress>,
 ) -> Result<Vec<Record>, String> {
     let scan_end = if opts.length > 0 {
         (opts.start + opts.length).min(reader.size())
@@ -884,6 +887,9 @@ pub fn run_parallel_with_budget(
     let automaton = Arc::new(Automaton::build(sigs)?);
     if jobs == 1 || total == 0 {
         let mut c = Carver::with_automaton(reader, opts, automaton).with_budget(budget);
+        if let Some(p) = progress {
+            c = c.with_progress(p);
+        }
         let out = c.run();
         let mut out = containment_filter(out, &*sink_for(opts));
         if opts.dedup {
@@ -911,6 +917,9 @@ pub fn run_parallel_with_budget(
             let automaton = Arc::clone(&automaton);
             handles.push(scope.spawn(move || {
                 let mut c = Carver::with_automaton(reader, &sub, automaton).with_budget(budget);
+                if let Some(p) = progress {
+                    c = c.with_progress(p);
+                }
                 c.run()
             }));
         }

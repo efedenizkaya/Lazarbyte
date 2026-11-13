@@ -16,3 +16,5 @@ crate-type = ["lib", "cdylib"]
 # default features pull cargo-metadata, which only the binding generator needs;
 # the runtime shipped to the app stays free of it.
 uniffi = { version = "0.32", default-features = false }
+lazarbyte-core = { path = "../lazarbyte-core" }
+

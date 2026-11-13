@@ -892,7 +892,7 @@ fn run() -> Result<ExitCode, String> {
                 Some(&progress),
                 |_, _, _| {},
             )?,
-            None => run_parallel_with_budget(&reader, &sigs, &opts, &budget)?,
+            None => run_parallel_with_budget(&reader, &sigs, &opts, &budget, Some(&progress))?,
         }
     } else {
         let fingerprint = checkpoint::Fingerprint {
