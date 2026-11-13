@@ -498,7 +498,7 @@ impl<'a> Volume<'a> {
         let inode = u32le(data, pos);
         let rec_len = u16le(data, pos + 4) as usize;
         let name_len = data[pos + 6] as usize;
-        if rec_len < 8 || rec_len % 4 != 0 || pos + 8 + name_len > data.len() {
+        if rec_len < 8 || !rec_len.is_multiple_of(4) || pos + 8 + name_len > data.len() {
             return None;
         }
         if name_len > 0 && inode > 0 && inode <= self.inodes_count {

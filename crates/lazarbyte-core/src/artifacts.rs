@@ -117,7 +117,7 @@ pub struct RecycleEntry {
 
 fn utf16_string(raw: &[u8]) -> String {
     let mut units = Vec::with_capacity(raw.len() / 2);
-    for pair in raw.chunks_exact(2) {
+    for pair in raw.as_chunks::<2>().0 {
         let u = u16::from_le_bytes([pair[0], pair[1]]);
         if u == 0 {
             break;
@@ -215,7 +215,11 @@ fn record_length(data: &[u8], pos: usize) -> Option<usize> {
     let head = if major == 2 { 24 } else { 40 };
     let name_len = u16le(data, pos + head + 32) as usize;
     let name_off = u16le(data, pos + head + 34) as usize;
-    if name_len == 0 || name_len % 2 != 0 || name_off < head + 36 || name_off + name_len > length {
+    if name_len == 0
+        || !name_len.is_multiple_of(2)
+        || name_off < head + 36
+        || name_off + name_len > length
+    {
         return None;
     }
     Some(length)

@@ -131,13 +131,14 @@ def check_carve(cli: Path, bindings: Path) -> int:
         skip_blank=True, skip_carved=True, jobs=1, max_output=0, validate=False,
         drop_failed=False, max_validate=256 << 20,
     )
+    src = lb.SourceHandle.from_path(str(img))
     ffi_records = [
         {
             "type": r.kind, "ext": r.ext, "offset": r.offset, "size": r.size,
             "sha256": r.sha256, "validated": r.validated, "decoded": r.decoded,
             "path": rel(r.path, ffi_out),
         }
-        for r in lb.scan_carve(str(img), opts, None, None)
+        for r in lb.scan_carve(src, opts, None, None)
     ]
     for e in cli_records:
         e["path"] = rel(e["path"], cli_out)
@@ -156,7 +157,7 @@ def check_fat(cli: Path, bindings: Path) -> int:
     cli_records = [e for e in events if e.get("event") == "file"]
 
     opts = lb.UndeleteOptions(out_dir=str(ffi_out), offset=0, include_live=False, min_size=0)
-    result = lb.undelete_fat(str(img), opts, None)
+    result = lb.undelete_fat(lb.SourceHandle.from_path(str(img)), opts, None)
     ffi_records = [
         {
             "name": r.name, "offset": r.offset, "size": r.size, "sha256": r.sha256,
@@ -186,7 +187,7 @@ def check_ext4(cli: Path, bindings: Path) -> int:
     cli_records = [e for e in events if e.get("event") == "file"]
 
     opts = lb.UndeleteOptions(out_dir=str(ffi_out), offset=0, include_live=False, min_size=0)
-    result = lb.undelete_ext4(str(img), opts, None)
+    result = lb.undelete_ext4(lb.SourceHandle.from_path(str(img)), opts, None)
     ffi_records = [
         {
             "name": r.name, "inode": r.inode, "size": r.size, "sha256": r.sha256,

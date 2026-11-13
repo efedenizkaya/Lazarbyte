@@ -452,7 +452,9 @@ fn long_name(parts: &[Vec<u8>]) -> String {
         chars.extend_from_slice(&le[14..26]);
         chars.extend_from_slice(&le[28..32]);
         let units: Vec<u16> = chars
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .take_while(|&u| u != 0 && u != 0xFFFF)
             .collect();
@@ -593,7 +595,9 @@ fn walk_exfat(vol: &Volume, entries: &mut Vec<Entry>) {
                 j += 32;
             }
             let units: Vec<u16> = chars
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| u16::from_le_bytes([c[0], c[1]]))
                 .take(name_len)
                 .collect();

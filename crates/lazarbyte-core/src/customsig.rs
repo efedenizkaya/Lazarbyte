@@ -65,7 +65,7 @@ fn parse_hex(s: &str) -> Result<Vec<u8>, String> {
         .filter(|c| !c.is_whitespace() && *c != ':')
         .collect();
     let cleaned = cleaned.trim_start_matches("0x").trim_start_matches("0X");
-    if cleaned.is_empty() || cleaned.len() % 2 != 0 {
+    if cleaned.is_empty() || !cleaned.len().is_multiple_of(2) {
         return Err(format!("not an even-length hex string: {s:?}"));
     }
     (0..cleaned.len())

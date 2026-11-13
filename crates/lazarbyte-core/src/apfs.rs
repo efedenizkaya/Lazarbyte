@@ -69,7 +69,7 @@ pub fn fletcher64(block: &[u8]) -> [u8; 8] {
     let body = &block[8.min(block.len())..];
     let mut lo: u64 = 0;
     let mut hi: u64 = 0;
-    for w in body.chunks_exact(4) {
+    for w in body.as_chunks::<4>().0 {
         let v = u32::from_le_bytes([w[0], w[1], w[2], w[3]]) as u64;
         lo = (lo + v) % 0xFFFF_FFFF;
         hi = (hi + lo) % 0xFFFF_FFFF;

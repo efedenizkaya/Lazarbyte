@@ -310,7 +310,9 @@ impl<'a> Volume<'a> {
                 continue;
             }
             let units: Vec<u16> = node[pos + 8..pos + 8 + name_len * 2]
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|c| u16::from_be_bytes([c[0], c[1]]))
                 .collect();
             if units.is_empty() || units.contains(&0) {

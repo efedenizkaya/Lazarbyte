@@ -5,9 +5,12 @@
 //! exported function parses arguments, calls one core entry point and maps its
 //! `Result` to an error the foreign side can catch.
 //!
-//! The whole crate is unsafe-free. The FdSource that will wrap a Kotlin
-//! `ParcelFileDescriptor` is the one approved exception to that rule
-//! (AGENTS.md §10) and lands with the Android build, not before.
+//! The whole crate is unsafe-free, with one approved exception: `fdsource.rs`,
+//! which owns a file descriptor handed over by Kotlin and is the single
+//! module allowed to contain unsafe code (AGENTS.md §3, §10). The crate-level
+//! lint is `deny` rather than `forbid` only so that this one module can lift
+//! it; any unsafe outside that module still fails the build.
+#![deny(unsafe_code)]
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -15,6 +18,8 @@ use std::time::Duration;
 use lazarbyte_core::carver::{self, OutputBudget};
 use lazarbyte_core::reader::Source;
 use lazarbyte_core::signatures::{resolve_types, Signature, SIGNATURES};
+
+mod fdsource;
 
 // Proc-macro-only API: no UDL file, no build.rs (the current official
 // recommendation, uniffi 0.32).
@@ -45,6 +50,54 @@ impl std::fmt::Display for ScanError {
 
 fn scan_error(msg: impl Into<String>) -> ScanError {
     ScanError::Failed(msg.into())
+}
+
+/// An open image the scan engines read from.
+///
+/// Sources are read-only by construction: whatever was opened, no code path
+/// in the core holds a writable handle to it (AGENTS.md §3).
+#[derive(uniffi::Object)]
+pub struct SourceHandle {
+    inner: Source,
+}
+
+#[uniffi::export]
+impl SourceHandle {
+    /// Open an image by path: the desktop way, and the emulator smoke test's.
+    #[uniffi::constructor]
+    pub fn from_path(path: String) -> Result<Self, ScanError> {
+        Ok(SourceHandle {
+            inner: Source::open(&path).map_err(|e| scan_error(e.to_string()))?,
+        })
+    }
+
+    /// Open an image from a file descriptor handed over by the app.
+    ///
+    /// The descriptor must have been detached with
+    /// `ParcelFileDescriptor.detachFd()`: ownership crosses the boundary here,
+    /// and the bridge closes it when the handle is dropped. See `fdsource.rs`
+    /// for the safety contract.
+    #[uniffi::constructor]
+    pub fn from_fd(fd: i32) -> Result<Self, ScanError> {
+        #[cfg(unix)]
+        {
+            Ok(SourceHandle {
+                inner: fdsource::source_from_fd(fd).map_err(|e| scan_error(e.to_string()))?,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = fd;
+            Err(scan_error(
+                "opening a source from a descriptor is only available on unix",
+            ))
+        }
+    }
+
+    /// How many bytes the image holds, for the pre-scan estimate.
+    pub fn size(&self) -> u64 {
+        self.inner.size()
+    }
 }
 
 /// Ask a running scan to stop.
@@ -276,14 +329,14 @@ fn spawn_progress_watcher(
 /// `cancel` stops it early, keeping what was already written.
 #[uniffi::export]
 pub fn scan_carve(
-    source_path: String,
+    source: Arc<SourceHandle>,
     options: CarveOptions,
     progress: Option<Box<dyn ProgressCallback>>,
     cancel: Option<Arc<ScanCancel>>,
 ) -> Result<Vec<CarveRecord>, ScanError> {
     // Bad names are rejected before the source is even opened.
     let sigs = options.signature_types()?;
-    let src = Source::open(&source_path).map_err(|e| scan_error(e.to_string()))?;
+    let src = &source.inner;
     let mut opts = options.to_core();
     opts.cancel = cancel.map(|c| Arc::clone(&c.inner));
 
@@ -297,7 +350,7 @@ pub fn scan_carve(
 
     let budget = OutputBudget::for_options(&opts);
     let records =
-        carver::run_parallel_with_budget(&src, &sigs, &opts, &budget, Some(&progress_counter))
+        carver::run_parallel_with_budget(src, &sigs, &opts, &budget, Some(&progress_counter))
             .map_err(scan_error)?;
 
     if let Some(w) = watcher {
@@ -350,22 +403,24 @@ mod tests {
 
     #[test]
     fn a_missing_source_is_an_error_not_a_crash() {
-        let r = scan_carve(
-            "Z:/definitely/not/there.img".into(),
-            CarveOptions::default(),
-            None,
-            None,
-        );
-        assert!(r.is_err());
+        let src = SourceHandle::from_path("Z:/definitely/not/there.img".into());
+        assert!(src.is_err(), "a missing source must fail to open");
     }
 
     #[test]
     fn an_unknown_signature_name_is_rejected_before_any_work() {
+        let tmp = Tmp::new("badsig");
+        let img = tmp.0.join("img.bin");
+        std::fs::write(&img, [0u8; 4096]).unwrap();
         let o = CarveOptions {
             signature_types: vec!["not-a-type".into()],
             ..CarveOptions::default()
         };
-        let r = scan_carve("unused".into(), o, None, None);
+        // The source opens, but no scan starts: the name is checked first.
+        let src = Arc::new(
+            SourceHandle::from_path(img.to_string_lossy().to_string()).expect("open source"),
+        );
+        let r = scan_carve(src, o, None, None);
         let Err(ScanError::Failed(msg)) = r else {
             panic!("expected a signature error");
         };
@@ -386,7 +441,15 @@ mod tests {
             signature_types: vec!["jpeg".into()],
             ..CarveOptions::default()
         };
-        let records = scan_carve(img.to_string_lossy().to_string(), o, None, None).unwrap();
+        let records = scan_carve(
+            Arc::new(
+                SourceHandle::from_path(img.to_string_lossy().to_string()).expect("open source"),
+            ),
+            o,
+            None,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(records.len(), 1, "{records:?}");
         let r = &records[0];
@@ -412,7 +475,14 @@ mod tests {
             out_dir: tmp.0.join("out").to_string_lossy().to_string(),
             ..CarveOptions::default()
         };
-        let records = scan_carve(img.to_string_lossy().to_string(), o, None, Some(cancel));
+        let records = scan_carve(
+            Arc::new(
+                SourceHandle::from_path(img.to_string_lossy().to_string()).expect("open source"),
+            ),
+            o,
+            None,
+            Some(cancel),
+        );
         // A cancelled scan is not an error: it returns what it has, here
         // nothing, because zeros hold no signatures.
         assert!(records.is_ok(), "{records:?}");
@@ -440,7 +510,15 @@ mod tests {
             ..CarveOptions::default()
         };
         let cb: Box<dyn ProgressCallback> = Box::new(Seen(Arc::clone(&log)));
-        let records = scan_carve(img.to_string_lossy().to_string(), o, Some(cb), None).unwrap();
+        let records = scan_carve(
+            Arc::new(
+                SourceHandle::from_path(img.to_string_lossy().to_string()).expect("open source"),
+            ),
+            o,
+            Some(cb),
+            None,
+        )
+        .unwrap();
         assert!(!records.is_empty());
 
         let reports = log.lock().unwrap();
@@ -540,11 +618,11 @@ pub struct FatResult {
 
 #[uniffi::export]
 pub fn undelete_fat(
-    source_path: String,
+    source: Arc<SourceHandle>,
     options: UndeleteOptions,
     cancel: Option<Arc<ScanCancel>>,
 ) -> Result<FatResult, ScanError> {
-    let src = Source::open(&source_path).map_err(|e| scan_error(e.to_string()))?;
+    let src = &source.inner;
     // dry_run stays false: a dry run is a CLI inventory mode, the app wants
     // the files themselves. A sink-less options leaves the FsSink default.
     let opts = lazarbyte_core::fat::Options {
@@ -556,7 +634,7 @@ pub fn undelete_fat(
         sink: None,
     };
     let (records, kind, cluster_size) =
-        lazarbyte_core::fat::recover(&src, options.offset, &opts, |_| {}).map_err(scan_error)?;
+        lazarbyte_core::fat::recover(src, options.offset, &opts, |_| {}).map_err(scan_error)?;
     Ok(FatResult {
         records: records
             .iter()
@@ -610,11 +688,11 @@ pub struct Ext4Result {
 
 #[uniffi::export]
 pub fn undelete_ext4(
-    source_path: String,
+    source: Arc<SourceHandle>,
     options: UndeleteOptions,
     cancel: Option<Arc<ScanCancel>>,
 ) -> Result<Ext4Result, ScanError> {
-    let src = Source::open(&source_path).map_err(|e| scan_error(e.to_string()))?;
+    let src = &source.inner;
     let opts = lazarbyte_core::ext4::Options {
         out_dir: options.out_dir,
         dry_run: false,
@@ -624,7 +702,7 @@ pub fn undelete_ext4(
         sink: None,
     };
     let (records, summary) =
-        lazarbyte_core::ext4::recover(&src, options.offset, &opts, |_| {}).map_err(scan_error)?;
+        lazarbyte_core::ext4::recover(src, options.offset, &opts, |_| {}).map_err(scan_error)?;
     Ok(Ext4Result {
         records: records
             .iter()
@@ -709,7 +787,12 @@ mod undelete_tests {
         // character, so the long name survives: the FAT16 variant only keeps
         // a short name whose first letter the delete clobbered.
         let (tmp, img) = Tmp::image("fat", "exfat.dd.gz");
-        let r = undelete_fat(img, opts(&tmp.0), None).expect("undelete_fat");
+        let r = undelete_fat(
+            Arc::new(SourceHandle::from_path(img.clone()).expect("open source")),
+            opts(&tmp.0),
+            None,
+        )
+        .expect("undelete_fat");
         assert_eq!(r.kind, "exfat");
         assert!(r.records.iter().all(|rec| rec.deleted));
         let recovered = r
@@ -733,7 +816,12 @@ mod undelete_tests {
     #[test]
     fn undelete_ext4_through_the_bridge_recovers_the_deleted_files() {
         let (tmp, img) = Tmp::image("ext", "ext4.img.gz");
-        let r = undelete_ext4(img, opts(&tmp.0), None).expect("undelete_ext4");
+        let r = undelete_ext4(
+            Arc::new(SourceHandle::from_path(img.clone()).expect("open source")),
+            opts(&tmp.0),
+            None,
+        )
+        .expect("undelete_ext4");
         assert!(r.records.iter().all(|rec| rec.deleted));
         let recovered = r
             .records
@@ -761,7 +849,12 @@ mod undelete_tests {
         let (tmp, img) = Tmp::image("fat", "fat16.dd.gz");
         let cancel = Arc::new(ScanCancel::new());
         cancel.cancel();
-        let r = undelete_fat(img, opts(&tmp.0), Some(cancel)).expect("undelete_fat");
+        let r = undelete_fat(
+            Arc::new(SourceHandle::from_path(img.clone()).expect("open source")),
+            opts(&tmp.0),
+            Some(cancel),
+        )
+        .expect("undelete_fat");
         // Nothing had been written yet when the flag was checked, so the run
         // comes back short but not broken.
         assert!(r.records.is_empty(), "{:?}", r.records);
@@ -779,7 +872,7 @@ mod undelete_tests {
         let out = dir.join("out").to_string_lossy().to_string();
         for r in [
             undelete_fat(
-                img.clone(),
+                Arc::new(SourceHandle::from_path(img.clone()).expect("open source")),
                 UndeleteOptions {
                     out_dir: out.clone(),
                     offset: 0,
@@ -790,7 +883,7 @@ mod undelete_tests {
             )
             .expect_err("fat must reject"),
             undelete_ext4(
-                img,
+                Arc::new(SourceHandle::from_path(img).expect("open source")),
                 UndeleteOptions {
                     out_dir: out,
                     offset: 0,

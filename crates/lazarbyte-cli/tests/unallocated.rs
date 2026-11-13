@@ -74,7 +74,7 @@ fn fat_free_space_comes_from_the_fat_and_excludes_live_data() {
     );
     assert!(live.size > 0);
     assert!(
-        !space.ranges.is_empty() && space.free_bytes % 512 == 0,
+        !space.ranges.is_empty() && space.free_bytes.is_multiple_of(512),
         "free space is not a whole number of sectors"
     );
     // The directory entry itself lives in the root directory area, which is

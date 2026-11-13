@@ -51,7 +51,7 @@ fn multi_disk(tag: &str) -> (Tmp, String, Vec<u64>) {
         let start = img.len();
         img.extend_from_slice(&body);
         let pad = (ALIGN - img.len() % ALIGN) % ALIGN;
-        img.extend(std::iter::repeat(0u8).take(pad));
+        img.extend(std::iter::repeat_n(0u8, pad));
         entries.push((ptype, start as u64 / SECTOR, body.len() as u64 / SECTOR));
     }
     for (i, (ptype, lba, count)) in entries.iter().enumerate() {

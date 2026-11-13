@@ -501,7 +501,7 @@ impl<'a> Carver<'a> {
                     if start < next_allowed && o.skip_carved {
                         continue;
                     }
-                    if o.align > 1 && start % o.align != 0 {
+                    if o.align > 1 && !start.is_multiple_of(o.align) {
                         continue;
                     }
                     if let Some(pre) = sig.precheck {

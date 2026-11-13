@@ -119,7 +119,7 @@ pub fn parse_recovery_password(text: &str) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(16);
     for g in &groups {
         let v: u64 = g.parse().map_err(|_| format!("bad recovery group {g}"))?;
-        if v % 11 != 0 {
+        if !v.is_multiple_of(11) {
             return Err(format!("recovery group {g} not divisible by 11"));
         }
         let v = v / 11;
