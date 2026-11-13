@@ -55,6 +55,7 @@ fn recover() -> (Vec<apfs::FileRecord>, apfs::Summary, Tmp) {
         dry_run: false,
         min_size: 0,
         cancel: None,
+        sink: None,
     };
     let (records, summary) = apfs::recover(&src, 0, &opts, |_| {}).expect("recover failed");
     (records, summary, dir)
@@ -149,6 +150,7 @@ fn a_container_that_is_not_apfs_is_refused() {
         dry_run: true,
         min_size: 0,
         cancel: None,
+        sink: None,
     };
     let err = apfs::recover(&src, 0, &opts, |_| {}).expect_err("accepted");
     assert!(err.contains("APFS"), "{err}");

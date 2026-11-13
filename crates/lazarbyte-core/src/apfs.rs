@@ -119,6 +119,10 @@ pub struct Options {
     /// Set by the front end to stop the sweep early. Files already written stay
     /// on disk; the run is reported as incomplete.
     pub cancel: Option<std::sync::Arc<crate::cancel::Cancel>>,
+    /// Where recovered files go. `None` writes under `out_dir`, which is what
+    /// the desktop does; the Android bridge supplies a sink that writes through
+    /// SAF, where a directory has no path.
+    pub sink: Option<std::sync::Arc<dyn crate::sink::Sink>>,
 }
 
 #[derive(Default)]
@@ -528,6 +532,7 @@ pub fn recover(
     }
 
     let paths = build_paths(&names);
+    let sink = crate::sink::for_run(opts.sink.as_ref(), &opts.out_dir);
     let mut out = Vec::new();
     let mut seen: HashSet<(u64, u64)> = HashSet::new();
     let mut unnamed = 0u64;
@@ -571,40 +576,20 @@ pub fn recover(
             .extension()
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_else(|| "bin".into());
-        let mut path = String::new();
-        let mut dest: Option<std::path::PathBuf> = None;
+        let mut dest: Option<crate::recover::Dest> = None;
         if !opts.dry_run {
-            let dir = std::path::PathBuf::from(&opts.out_dir).join("apfs");
+            let dir = std::path::Path::new("apfs");
             let rel = if named.is_some() {
                 dir.join(label.trim_start_matches('/'))
             } else {
                 dir.join("_unnamed").join(format!("inode_{file_id}.{ext}"))
             };
-            let mut p = rel;
-            if let Some(parent) = p.parent() {
-                if std::fs::create_dir_all(parent).is_err() {
-                    continue;
-                }
-            }
-            if p.exists() {
-                let stem = p
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "file".into());
-                let suffix = p
-                    .extension()
-                    .map(|e| format!(".{}", e.to_string_lossy()))
-                    .unwrap_or_default();
-                p = p.with_file_name(format!("{stem}_{file_id}{suffix}"));
-            }
-            dest = Some(p);
+            let alt = crate::sink::alt_name(&rel, &format!("{file_id}"));
+            dest = Some(crate::recover::Dest::unique(sink.clone(), rel, alt));
         }
-        let Some(written) = crate::recover::copy(src, &pieces, size, dest.as_deref()) else {
+        let Some(written) = crate::recover::copy(src, &pieces, size, dest.as_ref()) else {
             continue;
         };
-        if let Some(p) = dest {
-            path = p.to_string_lossy().to_string();
-        }
         let rec = FileRecord {
             file_id,
             name: label,
@@ -614,7 +599,7 @@ pub fn recover(
             // Only a file whose map was complete and whose name was found is
             // fully accounted for.
             validated: written.complete && named.is_some(),
-            path,
+            path: written.id,
             timestamps: meta.map(|m| m.timestamps).unwrap_or_default(),
         };
         on_file(&rec);

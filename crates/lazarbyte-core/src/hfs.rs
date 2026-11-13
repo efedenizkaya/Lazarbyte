@@ -94,6 +94,10 @@ pub struct Options {
     /// Set by the front end to stop the sweep early. Files already written stay
     /// on disk; the run is reported as incomplete.
     pub cancel: Option<std::sync::Arc<crate::cancel::Cancel>>,
+    /// Where recovered files go. `None` writes under `out_dir`, which is what
+    /// the desktop does; the Android bridge supplies a sink that writes through
+    /// SAF, where a directory has no path.
+    pub sink: Option<std::sync::Arc<dyn crate::sink::Sink>>,
 }
 
 impl Default for Options {
@@ -105,6 +109,7 @@ impl Default for Options {
             min_size: 0,
             scan_volume: true,
             cancel: None,
+            sink: None,
         }
     }
 }
@@ -545,6 +550,7 @@ pub fn recover(
         found.extend(elsewhere);
     }
     let paths = build_paths(&names);
+    let sink = crate::sink::for_run(opts.sink.as_ref(), &opts.out_dir);
 
     let mut out = Vec::new();
     let mut seen: HashSet<(u64, u64)> = HashSet::new();
@@ -576,41 +582,21 @@ pub fn recover(
             .extension()
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_else(|| "bin".into());
-        let mut path = String::new();
-        let mut dest: Option<std::path::PathBuf> = None;
+        let mut dest: Option<crate::recover::Dest> = None;
         if !opts.dry_run {
             let rel = if vpath.is_empty() {
-                std::path::PathBuf::from("_orphans").join(format!("cnid_{}.{ext}", entry.cnid))
+                std::path::Path::new("hfs")
+                    .join("_orphans")
+                    .join(format!("cnid_{}.{ext}", entry.cnid))
             } else {
-                std::path::PathBuf::from(vpath.trim_start_matches('/'))
+                std::path::Path::new("hfs").join(vpath.trim_start_matches('/'))
             };
-            let mut p = std::path::PathBuf::from(&opts.out_dir)
-                .join("hfs")
-                .join(rel);
-            if let Some(parent) = p.parent() {
-                if std::fs::create_dir_all(parent).is_err() {
-                    continue;
-                }
-            }
-            if p.exists() {
-                let stem = p
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "file".into());
-                let suffix = p
-                    .extension()
-                    .map(|e| format!(".{}", e.to_string_lossy()))
-                    .unwrap_or_default();
-                p = p.with_file_name(format!("{stem}_cnid{}{suffix}", entry.cnid));
-            }
-            dest = Some(p);
+            let alt = crate::sink::alt_name(&rel, &format!("cnid{}", entry.cnid));
+            dest = Some(crate::recover::Dest::unique(sink.clone(), rel, alt));
         }
-        let Some(written) = crate::recover::copy(src, &pieces, entry.size, dest.as_deref()) else {
+        let Some(written) = crate::recover::copy(src, &pieces, entry.size, dest.as_ref()) else {
             continue;
         };
-        if let Some(p) = dest {
-            path = p.to_string_lossy().to_string();
-        }
         let rec = FileRecord {
             cnid: entry.cnid,
             name: label,
@@ -619,7 +605,7 @@ pub fn recover(
             sha256: written.sha256,
             validated: written.complete,
             deleted: is_deleted,
-            path,
+            path: written.id,
             timestamps: entry.timestamps,
         };
         on_file(&rec);

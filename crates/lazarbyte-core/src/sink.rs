@@ -6,11 +6,12 @@
 //! the sink returns. On desktop that identifier is the path a record has always
 //! carried, so manifests are unchanged.
 //!
-//! A sink is chosen per run (`carver::Options::sink`); the default is
-//! [`FsSink`] over `Options::out_dir`.
+//! A sink is chosen per run (`carver::Options::sink` and the same field on each
+//! undelete `Options`); the default is [`FsSink`] over `Options::out_dir`.
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// A destination for recovered files.
 ///
@@ -41,6 +42,27 @@ pub trait Sink: Send + Sync {
     /// verified one. Failure is not interesting to the caller: the record is
     /// dropped either way, and a stray duplicate is not a lost file.
     fn remove(&self, id: &str);
+}
+
+/// The sink a run writes through: the caller's, or a directory on the local
+/// filesystem under `dir`.
+pub(crate) fn for_run(sink: Option<&Arc<dyn Sink>>, dir: &str) -> Arc<dyn Sink> {
+    sink.cloned().unwrap_or_else(|| Arc::new(FsSink::new(dir)))
+}
+
+/// The caller's fallback name when a sink already holds `rel`:
+/// `dir/stem_TAG.ext`. Both undelete modes need one, and both want it stable
+/// across runs, so the tag is the entry's offset or its inode number.
+pub(crate) fn alt_name(rel: &Path, tag: &str) -> PathBuf {
+    let stem = rel
+        .file_stem()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "file".into());
+    let suffix = rel
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    rel.with_file_name(format!("{stem}_{tag}{suffix}"))
 }
 
 fn make_parent(p: &Path) -> io::Result<()> {

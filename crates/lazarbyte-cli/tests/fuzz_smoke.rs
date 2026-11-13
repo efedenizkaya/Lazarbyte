@@ -284,6 +284,7 @@ fn filesystem_parsers_survive_mutated_volumes() {
                 min_size: 0,
                 only_path: None,
                 cancel: None,
+                sink: None,
             },
             |_| {},
         );
@@ -296,6 +297,7 @@ fn filesystem_parsers_survive_mutated_volumes() {
                 include_live: true,
                 min_size: 0,
                 cancel: None,
+                sink: None,
             },
             |_| {},
         );
@@ -308,6 +310,7 @@ fn filesystem_parsers_survive_mutated_volumes() {
                 include_live: true,
                 min_size: 0,
                 cancel: None,
+                sink: None,
             },
             |_| {},
         );
@@ -321,6 +324,7 @@ fn filesystem_parsers_survive_mutated_volumes() {
                 min_size: 0,
                 scan_volume: true,
                 cancel: None,
+                sink: None,
             },
             |_| {},
         );
@@ -332,6 +336,7 @@ fn filesystem_parsers_survive_mutated_volumes() {
                 dry_run: true,
                 min_size: 0,
                 cancel: None,
+                sink: None,
             },
             |_| {},
         );

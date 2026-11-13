@@ -64,6 +64,7 @@ fn recover(name: &str, include_live: bool) -> (Vec<fat::FileRecord>, &'static st
         include_live,
         min_size: 0,
         cancel: None,
+        sink: None,
     };
     let (records, kind, _cluster) = fat::recover(&src, 0, &opts, |_| {}).expect("recover failed");
     (records, kind, dir, img)
@@ -177,6 +178,7 @@ fn a_volume_that_is_not_fat_is_refused() {
         include_live: false,
         min_size: 0,
         cancel: None,
+        sink: None,
     };
     let err = fat::recover(&src, 0, &opts, |_| {}).expect_err("accepted");
     assert!(err.contains("FAT"), "{err}");
@@ -196,6 +198,7 @@ fn cancelling_the_walk_keeps_what_was_already_recovered() {
         include_live: true,
         min_size: 0,
         cancel: Some(Arc::clone(&cancel)),
+        sink: None,
     };
     let mut reported = 0;
     let (records, _kind, _cluster) = fat::recover(&src, 0, &opts, |_| {

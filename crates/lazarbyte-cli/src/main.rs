@@ -1195,6 +1195,7 @@ fn run_fat(
         include_live,
         min_size: opts.min_size,
         cancel: opts.cancel.clone(),
+        sink: None,
     };
     let (records, kind, cluster_size) = fat::recover(reader, opts.start, &fopts, |rec| {
         if machine {
@@ -1335,6 +1336,7 @@ fn run_ext4(
         include_live,
         min_size: opts.min_size,
         cancel: opts.cancel.clone(),
+        sink: None,
     };
     let (records, summary) = ext4::recover(reader, opts.start, &eopts, |rec| {
         if machine {
@@ -1472,6 +1474,7 @@ fn run_hfs(
         min_size: opts.min_size,
         scan_volume: true,
         cancel: opts.cancel.clone(),
+        sink: None,
     };
     let (records, summary) = hfs::recover(reader, opts.start, &hopts, |rec| {
         if machine {
@@ -1599,6 +1602,7 @@ fn run_apfs(
         dry_run: opts.dry_run,
         min_size: opts.min_size,
         cancel: opts.cancel.clone(),
+        sink: None,
     };
     let (records, summary) = apfs::recover(reader, opts.start, &aopts, |rec| {
         if machine {
@@ -1971,6 +1975,7 @@ fn recover_one(
                 min_size: opts.min_size,
                 only_path: None,
                 cancel: opts.cancel.clone(),
+                sink: None,
             };
             for r in ntfs::recover(reader, base, &o, |_| {})? {
                 let confidence = r.confidence();
@@ -2000,6 +2005,7 @@ fn recover_one(
                 include_live,
                 min_size: opts.min_size,
                 cancel: opts.cancel.clone(),
+                sink: None,
             };
             let (records, kind, _cluster) = fat::recover(reader, base, &o, |_| {})?;
             for r in records {
@@ -2030,6 +2036,7 @@ fn recover_one(
                 include_live,
                 min_size: opts.min_size,
                 cancel: opts.cancel.clone(),
+                sink: None,
             };
             let (records, _summary) = ext4::recover(reader, base, &o, |_| {})?;
             for r in records {
@@ -2061,6 +2068,7 @@ fn recover_one(
                 min_size: opts.min_size,
                 scan_volume: true,
                 cancel: opts.cancel.clone(),
+                sink: None,
             };
             let (records, _summary) = hfs::recover(reader, base, &o, |_| {})?;
             for r in records {
@@ -2090,6 +2098,7 @@ fn recover_one(
                 dry_run: opts.dry_run,
                 min_size: opts.min_size,
                 cancel: opts.cancel.clone(),
+                sink: None,
             };
             let (records, _summary) = apfs::recover(reader, base, &o, |_| {})?;
             for r in records {
@@ -2497,6 +2506,7 @@ fn run_ntfs(
         min_size: opts.min_size,
         only_path,
         cancel: opts.cancel.clone(),
+        sink: None,
     };
     let started = Instant::now();
     let quiet = opts.quiet;

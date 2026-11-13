@@ -7,9 +7,11 @@
 //! walk the file's pieces, write as they read, and hash in the same pass.
 
 use crate::reader::Source;
+use crate::sink::Sink;
 use sha2::{Digest, Sha256};
 use std::io::Write;
-use std::path::Path;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 /// One piece of a file's content, in file order.
 pub enum Piece {
@@ -29,6 +31,75 @@ pub struct Written {
     pub sha256: String,
     /// Every byte came from the source, not from a pad or a hole.
     pub complete: bool,
+    /// What the destination calls the file: a path on desktop, a document URI
+    /// through SAF on Android. Empty when nothing was written.
+    pub id: String,
+}
+
+/// Where one recovered file goes, resolved on the first byte.
+///
+/// Opening lazily is what keeps a file whose map turns out to be unreadable from
+/// leaving an empty file behind. On desktop the destination is a sink over the
+/// output directory, so the identifier is the path a record has always carried;
+/// on Android the sink is the SAF layer and the identifier is a document URI.
+pub enum Dest {
+    /// A file on the local filesystem.
+    Path(PathBuf),
+    /// A sink, and the names to offer it.
+    Sink {
+        sink: Arc<dyn Sink>,
+        rel: PathBuf,
+        /// The caller's fallback when `rel` is taken. `None` replaces an
+        /// existing file instead of refusing to overwrite it.
+        alt: Option<PathBuf>,
+    },
+}
+
+impl Dest {
+    pub fn path(p: impl Into<PathBuf>) -> Self {
+        Dest::Path(p.into())
+    }
+
+    /// A destination that replaces whatever is already there: a resumed scan
+    /// writes the same bytes under the same name.
+    pub fn sink(sink: Arc<dyn Sink>, rel: impl Into<PathBuf>) -> Self {
+        Dest::Sink {
+            sink,
+            rel: rel.into(),
+            alt: None,
+        }
+    }
+
+    /// A destination that must not replace anything. `alt` is the caller's
+    /// fallback name, chosen from the entry itself so it is stable across runs.
+    pub fn unique(sink: Arc<dyn Sink>, rel: impl Into<PathBuf>, alt: impl Into<PathBuf>) -> Self {
+        Dest::Sink {
+            sink,
+            rel: rel.into(),
+            alt: Some(alt.into()),
+        }
+    }
+
+    fn open(&self) -> Option<(Box<dyn Write>, String)> {
+        match self {
+            Dest::Path(p) => {
+                if let Some(dir) = p.parent() {
+                    if !dir.as_os_str().is_empty() && std::fs::create_dir_all(dir).is_err() {
+                        return None;
+                    }
+                }
+                let f = std::fs::File::create(p).ok()?;
+                Some((
+                    Box::new(std::io::BufWriter::new(f)),
+                    p.to_string_lossy().to_string(),
+                ))
+            }
+            Dest::Sink { sink, rel, alt } => match alt {
+                Some(alt) => sink.create_unique(rel, alt).ok(),
+                None => sink.create(rel).ok(),
+            },
+        }
+    }
 }
 
 /// Copy `pieces` to `dest`, hashing while it reads.
@@ -37,11 +108,11 @@ pub struct Written {
 /// reported incomplete, as a whole-file read did before. `None` hashes without
 /// writing, which is what a dry run needs. Returns `None` when nothing could be
 /// read (no empty file is left behind) or the destination cannot be written.
-pub fn copy(src: &Source, pieces: &[Piece], expected: u64, dest: Option<&Path>) -> Option<Written> {
+pub fn copy(src: &Source, pieces: &[Piece], expected: u64, dest: Option<&Dest>) -> Option<Written> {
     let mut hasher = Sha256::new();
     let mut bytes = 0u64;
     let mut complete = true;
-    let mut out: Option<std::io::BufWriter<std::fs::File>> = None;
+    let mut out: Option<(Box<dyn Write>, String)> = None;
     let zeros = vec![0u8; (1 << 20).min(expected.max(1) as usize)];
     let mut stopped = false;
 
@@ -56,11 +127,11 @@ pub fn copy(src: &Source, pieces: &[Piece], expected: u64, dest: Option<&Path>) 
                 while done < left {
                     let take = (left - done).min(zeros.len() as u64) as usize;
                     if out.is_none() {
-                        if let Some(path) = dest {
-                            out = Some(std::io::BufWriter::new(std::fs::File::create(path).ok()?));
+                        if let Some(d) = dest {
+                            out = Some(d.open()?);
                         }
                     }
-                    if let Some(w) = out.as_mut() {
+                    if let Some((w, _)) = out.as_mut() {
                         if w.write_all(&zeros[..take]).is_err() {
                             return None;
                         }
@@ -83,11 +154,11 @@ pub fn copy(src: &Source, pieces: &[Piece], expected: u64, dest: Option<&Path>) 
                         break;
                     }
                     if out.is_none() {
-                        if let Some(path) = dest {
-                            out = Some(std::io::BufWriter::new(std::fs::File::create(path).ok()?));
+                        if let Some(d) = dest {
+                            out = Some(d.open()?);
                         }
                     }
-                    if let Some(w) = out.as_mut() {
+                    if let Some((w, _)) = out.as_mut() {
                         if w.write_all(&chunk).is_err() {
                             return None;
                         }
@@ -111,7 +182,7 @@ pub fn copy(src: &Source, pieces: &[Piece], expected: u64, dest: Option<&Path>) 
         let mut left = expected - bytes;
         while left > 0 {
             let take = left.min(zeros.len() as u64) as usize;
-            if let Some(w) = out.as_mut() {
+            if let Some((w, _)) = out.as_mut() {
                 if w.write_all(&zeros[..take]).is_err() {
                     return None;
                 }
@@ -125,15 +196,18 @@ pub fn copy(src: &Source, pieces: &[Piece], expected: u64, dest: Option<&Path>) 
     if bytes == 0 {
         return None;
     }
-    if let Some(mut w) = out {
+    let mut id = String::new();
+    if let Some((mut w, opened)) = out {
         if w.flush().is_err() {
             return None;
         }
+        id = opened;
     }
     Some(Written {
         bytes,
         sha256: format!("{:x}", hasher.finalize()),
         complete,
+        id,
     })
 }
 
@@ -165,12 +239,17 @@ mod tests {
             &src,
             &[Piece::Data(0, len as u64)],
             len as u64,
-            Some(&out_path),
+            Some(&Dest::path(&out_path)),
         )
         .expect("copy");
 
         assert_eq!(written.bytes, len as u64);
         assert!(written.complete);
+        assert_eq!(
+            written.id,
+            out_path.to_string_lossy(),
+            "a desktop destination still names the file by its path"
+        );
         assert_eq!(written.sha256, format!("{:x}", Sha256::digest(&body)));
         assert_eq!(std::fs::read(&out_path).expect("read output"), body);
         let _ = std::fs::remove_file(&src_path);
@@ -186,7 +265,7 @@ mod tests {
         let src = Source::open(src_path.to_str().expect("path")).expect("open source");
 
         let pieces = [Piece::Data(0, 4096), Piece::Hole(1024)];
-        let written = copy(&src, &pieces, 5120, Some(&out_path)).expect("copy");
+        let written = copy(&src, &pieces, 5120, Some(&Dest::path(&out_path))).expect("copy");
 
         assert_eq!(written.bytes, 5120);
         assert!(!written.complete);

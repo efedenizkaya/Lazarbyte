@@ -747,6 +747,10 @@ pub struct Options {
     /// Set by the front end to stop the walk early. Files already written stay
     /// on disk; the run is reported as incomplete.
     pub cancel: Option<std::sync::Arc<crate::cancel::Cancel>>,
+    /// Where recovered files go. `None` writes under `out_dir`, which is what
+    /// the desktop does; the Android bridge supplies a sink that writes through
+    /// SAF, where a directory has no path.
+    pub sink: Option<std::sync::Arc<dyn crate::sink::Sink>>,
 }
 
 /// Walk the MFT and recover deleted files.
@@ -913,24 +917,15 @@ fn recover_stream(
 
     let mut hasher = Sha256::new();
     let mut out_path = String::new();
-    let mut file = None;
+    let mut file: Option<std::io::BufWriter<Box<dyn Write>>> = None;
     if !opts.dry_run {
-        let rel = label.trim_start_matches('/');
-        let mut p = std::path::PathBuf::from(&opts.out_dir)
-            .join("ntfs")
-            .join(rel);
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent).ok()?;
-        }
-        if p.exists() {
-            // Two records can claim the same path; keep both, named by record.
-            let stem = p.file_stem().map(|s| s.to_string_lossy().to_string())?;
-            let ext = p.extension().map(|e| format!(".{}", e.to_string_lossy()));
-            let fname = format!("{stem}_mft{}{}", info.num, ext.unwrap_or_default());
-            p = p.with_file_name(fname);
-        }
-        file = Some(std::io::BufWriter::new(std::fs::File::create(&p).ok()?));
-        out_path = p.to_string_lossy().to_string();
+        let sink = crate::sink::for_run(opts.sink.as_ref(), &opts.out_dir);
+        let rel = std::path::Path::new("ntfs").join(label.trim_start_matches('/'));
+        // Two records can claim the same path; keep both, named by record.
+        let alt = crate::sink::alt_name(&rel, &format!("mft{}", info.num));
+        let (w, id) = sink.create_unique(&rel, &alt).ok()?;
+        file = Some(std::io::BufWriter::new(w));
+        out_path = id;
     }
 
     let mut written = 0u64;

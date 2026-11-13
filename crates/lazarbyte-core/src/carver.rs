@@ -8,7 +8,7 @@ use crate::cancel;
 use crate::handlers::Carve;
 use crate::reader::Source;
 use crate::signatures::Signature;
-use crate::sink::{FsSink, Sink};
+use crate::sink::Sink;
 use crate::window::Window;
 use aho_corasick::{AhoCorasick, MatchKind};
 use sha2::{Digest, Sha256};
@@ -315,9 +315,7 @@ impl Options {
 /// The sink this run writes through: the caller's, or a directory on the local
 /// filesystem under `out_dir`.
 fn sink_for(opts: &Options) -> Arc<dyn Sink> {
-    opts.sink
-        .clone()
-        .unwrap_or_else(|| Arc::new(FsSink::new(opts.out_dir.clone())))
+    crate::sink::for_run(opts.sink.as_ref(), &opts.out_dir)
 }
 
 pub struct Carver<'a> {

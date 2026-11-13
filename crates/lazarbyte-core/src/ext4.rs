@@ -88,6 +88,10 @@ pub struct Options {
     /// Set by the front end to stop the walk early. Files already written stay
     /// on disk; the run is reported as incomplete.
     pub cancel: Option<std::sync::Arc<crate::cancel::Cancel>>,
+    /// Where recovered files go. `None` writes under `out_dir`, which is what
+    /// the desktop does; the Android bridge supplies a sink that writes through
+    /// SAF, where a directory has no path.
+    pub sink: Option<std::sync::Arc<dyn crate::sink::Sink>>,
 }
 
 struct Inode {
@@ -615,6 +619,7 @@ pub fn recover(
     let vol = locate(src, offset)?;
     let names = vol.directory_names();
     let paths = build_paths(&names);
+    let sink = crate::sink::for_run(opts.sink.as_ref(), &opts.out_dir);
     let mut out = Vec::new();
     let mut map_gone = 0u64;
 
@@ -657,42 +662,22 @@ pub fn recover(
             .extension()
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_else(|| "bin".into());
-        let mut path = String::new();
-        let mut dest: Option<std::path::PathBuf> = None;
+        let mut dest: Option<crate::recover::Dest> = None;
         if !opts.dry_run {
             let rel = if vpath.is_empty() || vpath == "_orphan_" {
-                std::path::PathBuf::from("_orphans").join(format!("inode_{ino}.{ext}"))
+                std::path::Path::new("ext4")
+                    .join("_orphans")
+                    .join(format!("inode_{ino}.{ext}"))
             } else {
-                std::path::PathBuf::from(vpath.trim_start_matches('/'))
+                std::path::Path::new("ext4").join(vpath.trim_start_matches('/'))
             };
-            let mut p = std::path::PathBuf::from(&opts.out_dir)
-                .join("ext4")
-                .join(rel);
-            if let Some(parent) = p.parent() {
-                if std::fs::create_dir_all(parent).is_err() {
-                    continue;
-                }
-            }
-            if p.exists() {
-                // A name can be reused; the inode number keeps them apart.
-                let stem = p
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "file".into());
-                let suffix = p
-                    .extension()
-                    .map(|e| format!(".{}", e.to_string_lossy()))
-                    .unwrap_or_default();
-                p = p.with_file_name(format!("{stem}_ino{ino}{suffix}"));
-            }
-            dest = Some(p);
+            // A name can be reused; the inode number keeps them apart.
+            let alt = crate::sink::alt_name(&rel, &format!("ino{ino}"));
+            dest = Some(crate::recover::Dest::unique(sink.clone(), rel, alt));
         }
-        let Some(written) = crate::recover::copy(src, &pieces, inode.size, dest.as_deref()) else {
+        let Some(written) = crate::recover::copy(src, &pieces, inode.size, dest.as_ref()) else {
             continue;
         };
-        if let Some(p) = dest {
-            path = p.to_string_lossy().to_string();
-        }
         let rec = FileRecord {
             inode: ino,
             name,
@@ -703,7 +688,7 @@ pub fn recover(
             // its name was found.
             validated: written.complete && !vpath.is_empty() && vpath != "_orphan_",
             deleted,
-            path,
+            path: written.id,
             timestamps: inode.times,
         };
         on_file(&rec);

@@ -56,6 +56,7 @@ fn recover(name: &str, include_live: bool) -> (Vec<ext4::FileRecord>, ext4::Summ
         include_live,
         min_size: 0,
         cancel: None,
+        sink: None,
     };
     let (records, summary) = ext4::recover(&src, 0, &opts, |_| {}).expect("recover failed");
     (records, summary, dir)
@@ -156,6 +157,7 @@ fn a_volume_that_is_not_ext_is_refused() {
         include_live: false,
         min_size: 0,
         cancel: None,
+        sink: None,
     };
     let err = ext4::recover(&src, 0, &opts, |_| {}).expect_err("accepted");
     assert!(err.contains("ext"), "{err}");

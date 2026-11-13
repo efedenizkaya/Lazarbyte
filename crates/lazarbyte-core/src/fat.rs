@@ -123,6 +123,10 @@ pub struct Options {
     /// Set by the front end to stop the walk early. Files already written stay
     /// on disk; the run is reported as incomplete.
     pub cancel: Option<std::sync::Arc<crate::cancel::Cancel>>,
+    /// Where recovered files go. `None` writes under `out_dir`, which is what
+    /// the desktop does; the Android bridge supplies a sink that writes through
+    /// SAF, where a directory has no path.
+    pub sink: Option<std::sync::Arc<dyn crate::sink::Sink>>,
 }
 
 /// Where a directory's bytes came from, so an entry's offset on the volume can
@@ -682,8 +686,8 @@ pub fn recover(
         Kind::Fat { .. } => walk_fat(&vol, &mut entries),
     }
     let kind = vol.kind_name();
+    let sink = crate::sink::for_run(opts.sink.as_ref(), &opts.out_dir);
     let mut out = Vec::new();
-    let mut used: HashSet<String> = HashSet::new();
     for ent in &entries {
         if crate::cancel::requested(opts.cancel.as_ref()) {
             break;
@@ -706,44 +710,25 @@ pub fn recover(
             .extension()
             .map(|e| e.to_string_lossy().to_lowercase())
             .unwrap_or_else(|| "bin".into());
-        let mut path = String::new();
-        let mut dest: Option<std::path::PathBuf> = None;
+        let mut dest: Option<crate::recover::Dest> = None;
         if !opts.dry_run {
-            let dir = std::path::PathBuf::from(&opts.out_dir).join(kind);
-            if std::fs::create_dir_all(&dir).is_err() {
-                continue;
-            }
-            let mut p = dir.join(sanitize(&name));
+            let rel = std::path::Path::new(kind).join(sanitize(&name));
             // Two entries can carry the same name -- a file deleted twice over,
             // or a short name colliding with a long one. Keep both.
-            let key = p.to_string_lossy().to_string();
-            if p.exists() || !used.insert(key) {
-                let stem = p
-                    .file_stem()
-                    .map(|s| s.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "file".into());
-                let suffix = p
-                    .extension()
-                    .map(|e| format!(".{}", e.to_string_lossy()))
-                    .unwrap_or_default();
-                p = p.with_file_name(format!("{stem}_{:x}{suffix}", ent.offset));
-            }
-            dest = Some(p);
+            let alt = crate::sink::alt_name(&rel, &format!("{:x}", ent.offset));
+            dest = Some(crate::recover::Dest::unique(sink.clone(), rel, alt));
         }
         let Some(written) = crate::recover::copy(
             src,
             &[crate::recover::Piece::Data(at, want)],
             want,
-            dest.as_deref(),
+            dest.as_ref(),
         ) else {
             continue;
         };
         // A declared size past the volume's end is not this file's: the record
         // keeps what could be read and is marked incomplete.
         let complete = written.complete && want == ent.size;
-        if let Some(p) = dest {
-            path = p.to_string_lossy().to_string();
-        }
         let rec = FileRecord {
             kind,
             name,
@@ -753,7 +738,7 @@ pub fn recover(
             sha256: written.sha256,
             validated: complete,
             deleted: ent.deleted,
-            path,
+            path: written.id,
             timestamps: ent.timestamps,
         };
         on_file(&rec);

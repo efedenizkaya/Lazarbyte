@@ -130,6 +130,7 @@ fn a_boot_sector_asking_for_an_impossible_record_size_is_refused() {
             min_size: 0,
             only_path: None,
             cancel: None,
+            sink: None,
         };
         let got = lazarbyte_core::ntfs::recover(&src, 0, &opts, |_| {});
         if !(240..=248).contains(&cpr) {
