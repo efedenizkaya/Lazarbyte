@@ -1,0 +1,6 @@
+# Machine-local paths and build outputs. This project lives in a public
+# repository; nothing under here is committed except the build scripts.
+local.properties
+.gradle/
+build/
+.cxx/

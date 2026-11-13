@@ -1,0 +1,28 @@
+[versions]
+# Versions verified against the official sources in November 2026:
+# AGP release notes (developer.android.com/build/releases), the Compose BOM
+# mapping page, Google Maven for androidx.activity, and the Kotlin plugin
+# portal. AGP 9 has Kotlin built in (runtime KGP 2.2.10, auto-upgrades when a
+# higher version is on the classpath); the Compose compiler plugin's version
+# is tied to the Kotlin version, so it is applied at the current stable and
+# upgrades the built-in runtime with it.
+agp = "9.5.1"
+kotlin = "2.4.21"
+composeBom = "2026.09.00"
+activityCompose = "1.13.0"
+# The uniffi-generated Kotlin bindings call the native library through JNA.
+# Declared in the app's dependencies as jna@aar: the plain jar has no natives,
+# and the AAR packs libjnidispatch.so per ABI, which is what JNA loads before
+# it can call into our library. The catalog has no artifact-type syntax for it.
+jna = "5.19.1"
+
+[libraries]
+compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+compose-material3 = { group = "androidx.compose.material3", name = "material3" }
+compose-ui = { group = "androidx.compose.ui", name = "ui" }
+compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+
+[plugins]
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-compose-compiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
