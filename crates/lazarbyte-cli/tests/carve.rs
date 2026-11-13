@@ -191,6 +191,42 @@ fn duplicates_are_marked_and_stored_once() {
 }
 
 #[test]
+fn a_carve_above_the_validation_ceiling_is_kept_but_never_verified() {
+    // Decoding needs the whole file in memory, so the ceiling is a memory
+    // bound: past it the bytes are still recovered, just not decoded, so the
+    // record cannot claim more than the structure walk found.
+    let dir = Tmp::new("valcap");
+    let png = builders::make_png();
+    let mut blob = vec![0u8; 512];
+    blob.extend_from_slice(&png);
+    let path = write_tmp(&dir, "cap.img", &blob);
+
+    let capped = carve_all(&path, dir.join("out-cap"), |o| {
+        o.validate = true;
+        o.max_validate = png.len() as u64 - 1;
+    });
+    let rec = capped.iter().find(|r| r.ext == "png").expect("png missed");
+    assert_eq!(rec.decoded, None, "decoded above the ceiling");
+    assert_eq!(rec.confidence(), "high");
+    assert_eq!(rec.size, png.len() as u64, "the file must still be written");
+
+    let at_ceiling = carve_all(&path, dir.join("out-all"), |o| {
+        o.validate = true;
+        o.max_validate = png.len() as u64;
+    });
+    let rec = at_ceiling
+        .iter()
+        .find(|r| r.ext == "png")
+        .expect("png missed");
+    assert_eq!(
+        rec.decoded,
+        Some(true),
+        "a carve at the ceiling should decode"
+    );
+    assert_eq!(rec.confidence(), "verified");
+}
+
+#[test]
 fn parallel_scan_matches_serial() {
     let dir = Tmp::new("parallel");
     let img = planted_image(&dir);

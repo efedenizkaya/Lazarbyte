@@ -44,3 +44,19 @@ The desktop CLI binary is 1.9 MiB of which 1.6 MiB is `.text`; the `regex`
 family alone is 447 KiB of that, so `grep` is the single largest saving. These
 are compiled-artifact numbers, not APK numbers: what the linker keeps after
 LTO decides the final package, and that is measured in Faz 5 on arm64.
+
+## Resource knobs
+
+What a scan holds in memory is set per run, not at build time. The desktop
+defaults are unchanged for parity; the Android app uses `Options::mobile()`.
+
+| Knob | Desktop default | `Options::mobile()` | What it costs |
+| --- | --- | --- | --- |
+| `chunk_size` (`--chunk`) | 32 MiB | 8 MiB | scanner buffer per worker |
+| `jobs` (`--jobs`) | 1 | 2 | workers, so about `jobs * chunk_size` resident |
+| `max_validate` (`--max-validate`) | 256 MiB | 8 MiB | a carve up to this size is buffered whole for `--validate` |
+
+A carve above `max_validate` is still written, but it is not decoded, so its
+record cannot claim "verified" -- at most the structure walk's "high". Undelete
+output is streamed in 8 MiB reads regardless of file size, so a recovered
+file's memory cost does not grow with it.

@@ -53,6 +53,9 @@ options:
                           SQLite structure); reported as verified/failed
       --drop-failed       with --validate, do not keep a file that failed to
                           decode
+      --max-validate SIZE only decode carves up to this size (default 256M);
+                          larger ones are written unvalidated, since decoding
+                          needs the whole file in memory
       --ntfs              NTFS undelete: walk the MFT for deleted files,
                           recovering names, paths and timestamps
       --fat               FAT12/16/32 or exFAT undelete: recover deleted
@@ -458,6 +461,7 @@ fn run() -> Result<ExitCode, String> {
                 opts.validate = true;
                 opts.drop_failed = true;
             }
+            "--max-validate" => opts.max_validate = parse_size(&next(&mut i)?)?,
             "--ntfs" => ntfs_mode = true,
             "--fat" | "--exfat" => fat_mode = true,
             "--ext4" | "--ext" => ext_mode = true,

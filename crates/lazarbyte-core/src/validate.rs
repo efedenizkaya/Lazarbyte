@@ -24,8 +24,11 @@ pub enum Verdict {
     Inconclusive,
 }
 
-/// Largest carve to validate. Validation needs the whole file in memory, and a
-/// multi-gigabyte carve is better left to the structural walk.
+/// Default ceiling on a carve that is buffered for decode validation.
+///
+/// Validation needs the whole file in memory, and a multi-gigabyte carve is
+/// better left to the structural walk. A caller with less memory (the Android
+/// app) lowers it through [`crate::carver::Options::max_validate`].
 pub const MAX_VALIDATE: u64 = 256 << 20;
 
 /// Cap on what a decompressor may produce, so a zip bomb cannot exhaust memory.

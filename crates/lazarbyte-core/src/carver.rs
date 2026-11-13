@@ -246,6 +246,11 @@ pub struct Options {
     pub validate: bool,
     /// Do not keep a carve whose decode failed.
     pub drop_failed: bool,
+    /// Largest carve to buffer for decode validation. Validation needs the
+    /// whole file in memory, so this is a memory ceiling, not a time limit:
+    /// anything larger is written without a decode, so its record cannot say
+    /// it was verified -- only what the structure walk found.
+    pub max_validate: u64,
 }
 
 impl Default for Options {
@@ -270,6 +275,23 @@ impl Default for Options {
             free_space: None,
             validate: false,
             drop_failed: false,
+            max_validate: crate::validate::MAX_VALIDATE,
+        }
+    }
+}
+
+impl Options {
+    /// Profile for a phone: a smaller scan chunk and fewer workers, because
+    /// resident memory is roughly `jobs * chunk_size` and a mid-range Android
+    /// device kills an app that holds tens of megabytes per worker. Validation
+    /// buffers the whole carve, so its ceiling is lowered too. The desktop CLI
+    /// keeps `Default`, which is unchanged.
+    pub fn mobile() -> Self {
+        Options {
+            chunk_size: 8 << 20,
+            jobs: 2,
+            max_validate: 8 << 20,
+            ..Options::default()
         }
     }
 }
@@ -490,10 +512,7 @@ impl<'a> Carver<'a> {
         let mut buffered: Option<Vec<u8>> = None;
         let mut carve_size = carve.size;
         let mut validated = carve.validated;
-        if o.validate
-            && carve.size <= crate::validate::MAX_VALIDATE
-            && crate::validate::can_validate(carve.ext)
-        {
+        if o.validate && carve.size <= o.max_validate && crate::validate::can_validate(carve.ext) {
             let mut data = Vec::with_capacity(carve.size as usize);
             let mut got = 0u64;
             while got < carve.size {
@@ -816,4 +835,18 @@ pub fn run_parallel_with_budget(
         dedupe(&mut out, opts.dry_run);
     }
     out
+}
+
+#[cfg(test)]
+mod profile_tests {
+    use super::Options;
+
+    #[test]
+    fn the_mobile_profile_is_lighter_than_the_desktop_default() {
+        let desktop = Options::default();
+        let mobile = Options::mobile();
+        assert!(mobile.chunk_size < desktop.chunk_size);
+        assert!(mobile.jobs <= desktop.jobs.max(2));
+        assert!(mobile.max_validate < desktop.max_validate);
+    }
 }
