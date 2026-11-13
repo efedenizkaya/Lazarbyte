@@ -251,31 +251,36 @@ impl Default for CarveOptions {
     }
 }
 
-impl CarveOptions {
-    /// A scan a mid-range phone survives: a smaller chunk and fewer workers,
-    /// because resident memory is roughly `jobs * chunk_size`, and a lower
-    /// validation ceiling, because validation buffers the whole carve.
-    pub fn mobile() -> Self {
-        let core = carver::Options::mobile();
-        CarveOptions {
-            out_dir: core.out_dir,
-            signature_types: Vec::new(),
-            start: core.start,
-            length: core.length,
-            min_size: core.min_size,
-            max_size: core.max_size,
-            chunk_size: core.chunk_size,
-            align: core.align,
-            dry_run: core.dry_run,
-            dedup: core.dedup,
-            skip_blank: core.skip_blank,
-            skip_carved: core.skip_carved,
-            jobs: core.jobs as u32,
-            max_output: core.max_output,
-            validate: core.validate,
-            drop_failed: core.drop_failed,
-            max_validate: core.max_validate,
-        }
+/// A scan a mid-range phone survives: a smaller chunk and fewer workers,
+/// because resident memory is roughly `jobs * chunk_size`, and a lower
+/// validation ceiling, because validation buffers the whole carve.
+///
+/// A plain function rather than a constructor: uniffi only allows those on
+/// interfaces, and CarveOptions is a record.
+#[uniffi::export]
+pub fn mobile_carve_options() -> CarveOptions {
+    carver_options_from_core(carver::Options::mobile())
+}
+
+fn carver_options_from_core(core: carver::Options) -> CarveOptions {
+    CarveOptions {
+        out_dir: core.out_dir,
+        signature_types: Vec::new(),
+        start: core.start,
+        length: core.length,
+        min_size: core.min_size,
+        max_size: core.max_size,
+        chunk_size: core.chunk_size,
+        align: core.align,
+        dry_run: core.dry_run,
+        dedup: core.dedup,
+        skip_blank: core.skip_blank,
+        skip_carved: core.skip_carved,
+        jobs: core.jobs as u32,
+        max_output: core.max_output,
+        validate: core.validate,
+        drop_failed: core.drop_failed,
+        max_validate: core.max_validate,
     }
 }
 

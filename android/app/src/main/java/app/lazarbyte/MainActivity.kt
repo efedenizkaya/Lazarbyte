@@ -10,7 +10,9 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -20,23 +22,24 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import uniffi.lazarbyte_ffi.SourceHandle
+import java.io.File
 
 /**
- * Faz 6, step 2: the source round trip. The user picks an image through the
- * Storage Access Framework, the app detaches its file descriptor and hands
- * the *number* to Rust, which takes ownership (see fdsource.rs in
- * lazarbyte-ffi for the safety contract that makes this sound).
- *
- * Ownership notes: `detachFd()` transfers the descriptor to this process's
- * bridge, so the ParcelFileDescriptor is never closed here; the Rust
- * SourceHandle owns the descriptor from the hand-off on and closes it when
- * the handle is closed. A handle opened for a previous image is closed
- * before a new one is opened, so at most one descriptor is alive at a time.
+ * Source selection and scan control. The user picks an image through the
+ * Storage Access Framework, the descriptor crosses to Rust (ownership moves
+ * with it; see fdsource.rs), and the scans run in [ScanService] so they
+ * survive the app leaving the foreground. Output goes into this app's
+ * private storage -- a real path the core's default sink writes to -- and
+ * the user exports individual files from the results screen (the owner
+ * chose this architecture for Faz 6's MVP; a SAF sink can come later).
  */
 class MainActivity : ComponentActivity() {
     private var source: SourceHandle? = null
+    /** The duplicate descriptor waiting for a scan; Rust never sees it until startScan. */
+    private var pendingScanFd: android.os.ParcelFileDescriptor? = null
     private var sourceInfo by mutableStateOf("No image chosen.")
     private var sourceError by mutableStateOf<String?>(null)
+    private var pickedName by mutableStateOf<String?>(null)
 
     private val openImage =
         registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
@@ -48,18 +51,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                SourceScreen(
-                    info = sourceInfo,
-                    error = sourceError,
-                    onOpen = { openImage.launch(arrayOf("*/*")) },
-                )
+                SourceScreen()
             }
         }
     }
 
     private fun openSource(uri: Uri) {
         source?.close()
+        pendingScanFd?.close()
         source = null
+        pendingScanFd = null
         sourceError = null
         val pfd = contentResolver.openFileDescriptor(uri, "r")
         if (pfd == null) {
@@ -67,14 +68,18 @@ class MainActivity : ComponentActivity() {
             return
         }
         try {
-            // Ownership moves across the bridge here: from this line on the
-            // descriptor belongs to Rust, which closes it when the handle is
-            // closed or dropped -- including when opening fails, because
-            // SourceHandle.fromFd owns the descriptor the moment it is
-            // constructed. Kotlin must not touch the number again.
+            // Two descriptors leave this method: one is detached and handed
+            // to Rust for the display handle (ownership moves with the
+            // number; fdsource.rs carries that contract), the other is a
+            // duplicate the activity keeps for the scan service to detach
+            // later. If opening fails after detach, Rust owns and closes the
+            // descriptor -- Kotlin must not touch the number again.
+            val servicePfd = pfd.dup()
             val fd = pfd.detachFd()
             val handle = SourceHandle.fromFd(fd)
             source = handle
+            pendingScanFd = servicePfd
+            pickedName = uri.lastPathSegment
             sourceInfo = "Image open: ${lastPathSegment(uri)}, ${handle.size()} bytes."
         } catch (e: Exception) {
             sourceError = e.message ?: e.javaClass.simpleName
@@ -82,29 +87,84 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /** Starts a scan; the service runs it in the foreground. */
+    private fun startScan(deep: Boolean) {
+        val pfd = pendingScanFd ?: return
+        val dir = File(getExternalFilesDir(null), "scans/${System.currentTimeMillis()}")
+        dir.mkdirs()
+        // Ownership of the duplicate descriptor moves to the service now; the
+        // Rust side closes it when the scan's handle is dropped.
+        val fd = pfd.detachFd()
+        pendingScanFd = null
+        ScanService.start(this, fd, dir.absolutePath, deep)
+        sourceInfo = "Scan started on $pickedName."
+    }
+
     private fun lastPathSegment(uri: Uri): String {
         return uri.lastPathSegment ?: uri.toString()
     }
-}
 
-@Composable
-private fun SourceScreen(info: String, error: String?, onOpen: () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text("Lazarbyte", style = MaterialTheme.typography.headlineMedium)
-        Text(info, style = MaterialTheme.typography.bodyMedium)
-        error?.let {
-            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+    @Composable
+    private fun SourceScreen() {
+        val state by ScanRepository.state
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text("Lazarbyte", style = MaterialTheme.typography.headlineMedium)
+            Text(sourceInfo, style = MaterialTheme.typography.bodyMedium)
+            sourceError?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+            Button(onClick = { openImage.launch(arrayOf("*/*")) }) {
+                Text("Choose an image…")
+            }
+            when (val s = state) {
+                is ScanState.Running -> {
+                    Text("${s.label}: ${s.scanned} / ${s.total} bytes", style = MaterialTheme.typography.bodyMedium)
+                    LinearProgressIndicator(
+                        progress = {
+                            if (s.total > 0) s.scanned.toFloat() / s.total else 0f
+                        },
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                    OutlinedButton(onClick = { ScanRepository.requestCancel() }) {
+                        Text("Cancel scan")
+                    }
+                }
+                is ScanState.Done -> {
+                    Text(
+                        "${s.items.size} files recovered (results below).",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                is ScanState.Failed -> {
+                    Text(
+                        "Scan failed: ${s.message}",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+                ScanState.Idle -> {
+                    Text(
+                        "Pick a FAT/exFAT image for a quick scan, or any image for a carve scan.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+            OutlinedButton(
+                enabled = source != null && state !is ScanState.Running,
+                onClick = { startScan(deep = false) },
+            ) {
+                Text("Quick scan (FAT/exFAT)")
+            }
+            OutlinedButton(
+                enabled = source != null && state !is ScanState.Running,
+                onClick = { startScan(deep = true) },
+            ) {
+                Text("Deep scan (carve)")
+            }
         }
-        Button(onClick = onOpen) {
-            Text("Choose an image…")
-        }
-        Text(
-            "Scanning is not wired up yet (Faz 6, step 2).",
-            style = MaterialTheme.typography.bodySmall,
-        )
     }
 }

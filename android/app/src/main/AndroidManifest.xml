@@ -3,7 +3,11 @@
 
     <!-- Deliberately absent: INTERNET, and with it every permission that
          implies network use. The app never sends user data anywhere
-         (AGENTS.md §3). -->
+         (AGENTS.md §3). The foreground-service permissions are only about
+         keeping a scan alive while the user leaves the app. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:label="Lazarbyte"
@@ -18,6 +22,11 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".ScanService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 
 </manifest>

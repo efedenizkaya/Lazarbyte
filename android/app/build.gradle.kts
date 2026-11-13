@@ -39,6 +39,7 @@ android {
 
 dependencies {
     implementation("net.java.dev.jna:jna:${libs.versions.jna.get()}@aar")
+    implementation(libs.core.ktx)
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.material3)
     implementation(libs.compose.ui)
