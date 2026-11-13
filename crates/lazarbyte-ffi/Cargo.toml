@@ -1,0 +1,18 @@
+[package]
+name = "lazarbyte-ffi"
+description = "uniffi bindings over lazarbyte-core for the Android app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+# cdylib is what cargo-ndk ships to the app (Faz 5); lib lets desktop tests
+# call the same exported surface without loading a shared library.
+crate-type = ["lib", "cdylib"]
+
+[dependencies]
+# default features pull cargo-metadata, which only the binding generator needs;
+# the runtime shipped to the app stays free of it.
+uniffi = { version = "0.32", default-features = false }

@@ -70,6 +70,13 @@ BSD/0BSD, ISC, Unlicense, Zlib).
 | typenum | 1.20.1 | MIT OR Apache-2.0 | https://github.com/paholg/typenum |
 | version_check | 0.9.5 | MIT OR Apache-2.0 | https://github.com/SergioBenitez/version_check |
 
+The table above is the pre-uniffi snapshot. Faz 4 added the uniffi family
+(documented in its own section below) and, with it, transitive crates that are
+all on the project's permissive allow-list — most of them development tooling
+pulled only by the `uniffi-bindgen` generator crate. The complete graph is
+checked against the allow-list by `cargo deny check` on every build, which is
+the standing enforcement, not this snapshot.
+
 Full license texts for these crates are shipped inside the crates themselves
 (`~/.cargo/registry/src/...`). They must be collected into the packaged app's
 third-party notices before any Play Store release; that is a Faz 8 task, not
@@ -103,16 +110,49 @@ OpenSSL/native-tls so the core stays pure Rust and offline. Run
 cargo-deny reports the uniffi exceptions as "not encountered"; that warning is
 expected.
 
-## Planned: uniffi (Faz 4)
+## uniffi family (added Faz 4)
 
-The Android/Kotlin bridge will use the [uniffi-rs](https://github.com/mozilla/uniffi-rs)
+The Android/Kotlin bridge uses the [uniffi-rs](https://github.com/mozilla/uniffi-rs)
 family, which is licensed under the **MPL-2.0**. This is the only exception to
 the project's permissive-license allow-list, and it is limited to unmodified
 uniffi crates used as dependencies (see `AGENTS.md` §2 and `deny.toml`).
 
-- uniffi, uniffi_core, uniffi_macros, uniffi_meta, uniffi_build,
-  uniffi_bindgen, uniffi_udl — MPL-2.0 — https://github.com/mozilla/uniffi-rs
+| Crate | Version | License | Source |
+| --- | --- | --- | --- |
+| uniffi | 0.32.2 | MPL-2.0 | https://github.com/mozilla/uniffi-rs |
+| uniffi_core | 0.32.2 | MPL-2.0 | https://github.com/mozilla/uniffi-rs |
+| uniffi_macros | 0.32.2 | MPL-2.0 | https://github.com/mozilla/uniffi-rs |
+| uniffi_internal_macros | 0.32.2 | MPL-2.0 | https://github.com/mozilla/uniffi-rs |
+| uniffi_meta | 0.32.2 | MPL-2.0 | https://github.com/mozilla/uniffi-rs |
+| uniffi_pipeline | 0.32.2 | MPL-2.0 | https://github.com/mozilla/uniffi-rs |
+| uniffi_udl | 0.32.2 | MPL-2.0 | https://github.com/mozilla/uniffi-rs |
+| uniffi_bindgen | 0.32.2 | MPL-2.0 | https://github.com/mozilla/uniffi-rs |
+
 - uniffi source files are never vendored, patched or modified in this
   repository. Using them as a dependency does not relicense Lazarbyte.
+- The runtime crate (`lazarbyte-ffi`) depends on `uniffi` with
+  `default-features = false`, so `cargo-metadata` and its MSRV requirements
+  stay out of the shipped library; the separate `uniffi-bindgen` crate enables
+  the generator features and is a development tool only.
 
 Full MPL-2.0 text: https://www.mozilla.org/en-US/MPL/2.0/
+
+## Awaiting a project-owner decision (Faz 4)
+
+Two gates fail `cargo deny check` until the owner rules on them. They are
+recorded here rather than silently allowed, like the fuzz workspace above.
+
+1. **Unicode-3.0 license** — `unicode-ident v1.0.27` is
+   `(MIT OR Apache-2.0) AND Unicode-3.0` and reaches the checked graph through
+   `proc-macro2`/`syn`, which uniffi's proc macros require. Unicode-3.0 is
+   OSI-approved and permissive, but the allow-list in `AGENTS.md` §2 does not
+   name it. The fuzz workspace already carries the same license (`arbitrary`)
+   outside the gate for the same reason. Proposed: add `Unicode-3.0` to the
+   `deny.toml` allow-list. Without it the uniffi proc-macro route cannot pass
+   the gate; there is no practical alternative.
+2. **RustSec `basic-toml` unmaintained advisory** — pulled by
+   `uniffi-bindgen` → `askama` → `basic-toml`. It is binding-generator tooling
+   only; nothing links it into the runtime library or the app.
+   `deny.toml` allows ignoring an advisory with a written reason and expiry
+   note. Proposed: ignore with reason "dev-tooling only, no runtime code path"
+   and an expiry note, reviewed when uniffi drops the dependency.

@@ -1,0 +1,17 @@
+[package]
+name = "uniffi-bindgen"
+description = "Runs uniffi's binding generator against the workspace's ffi crate"
+version.workspace = true
+edition.workspace = true
+# Not the workspace claim: its dependency graph (uniffi/cli ->
+# cargo-platform 0.3.3) declares 1.91, and this crate is dev tooling only.
+# lazarbyte-ffi, the runtime, stays on the workspace rust-version and is
+# verified to compile on 1.85.
+rust-version = "1.91"
+license.workspace = true
+publish = false
+
+[dependencies]
+# cargo-metadata is what lets `generate` read a compiled library file (the
+# proc-macro route needs the library, not a UDL file).
+uniffi = { version = "0.32", features = ["cli", "cargo-metadata"] }

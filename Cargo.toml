@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/lazarbyte-core", "crates/lazarbyte-cli"]
+members = ["crates/lazarbyte-core", "crates/lazarbyte-cli", "crates/lazarbyte-ffi", "crates/uniffi-bindgen"]
 exclude = ["fuzz"]
 
 [workspace.package]
