@@ -452,3 +452,360 @@ mod tests {
         assert_eq!(last.0, last.1, "the scan ran to completion: {reports:?}");
     }
 }
+
+// --- undelete exports (Faz 4, step 3) ---
+
+/// A file's timestamps, in seconds since the Unix epoch.
+///
+/// Engines differ in what they keep: FAT has no change or delete times, ext
+/// has no creation time. A field the engine does not carry is `0`, which the
+/// app renders as "unknown".
+#[derive(Debug, uniffi::Record)]
+pub struct Timestamps {
+    pub created: u64,
+    pub modified: u64,
+    pub accessed: u64,
+    /// When the content last changed (ext, NTFS). `0` when not carried.
+    pub changed: u64,
+    /// When the file was freed (ext keeps this, unlike NTFS). `0` when not.
+    pub deleted: u64,
+}
+
+fn timestamps_fat(ts: lazarbyte_core::fat::Timestamps) -> Timestamps {
+    Timestamps {
+        created: ts.created,
+        modified: ts.modified,
+        accessed: ts.accessed,
+        changed: 0,
+        deleted: 0,
+    }
+}
+
+fn timestamps_ext4(ts: lazarbyte_core::ext4::Timestamps) -> Timestamps {
+    Timestamps {
+        created: 0,
+        modified: ts.modified,
+        accessed: ts.accessed,
+        changed: ts.changed,
+        deleted: ts.deleted,
+    }
+}
+
+/// Settings shared by the undelete engines.
+///
+/// A SAF-backed sink arrives with the Android bridge; until then `out_dir`
+/// must be a writable directory path, always a different one from the source's
+/// storage: the source is opened read-only and never written to.
+#[derive(Debug, uniffi::Record)]
+pub struct UndeleteOptions {
+    /// Where recovered files go.
+    pub out_dir: String,
+    /// Byte offset of the volume inside the image; `0` lets the engine find it.
+    pub offset: u64,
+    /// Also report files that are still there, not just deleted ones.
+    pub include_live: bool,
+    /// Skip files smaller than this.
+    pub min_size: u64,
+}
+
+/// One file recovered from a FAT12/16/32 or exFAT volume.
+#[derive(Debug, uniffi::Record)]
+pub struct FatFileRecord {
+    /// `fat` or `exfat`.
+    pub kind: String,
+    pub name: String,
+    pub ext: String,
+    /// Byte offset of the directory entry this came from.
+    pub offset: u64,
+    pub size: u64,
+    pub sha256: String,
+    /// The declared length was readable inside the volume. It does not mean
+    /// the file was contiguous -- FAT cannot say.
+    pub validated: bool,
+    pub deleted: bool,
+    pub path: String,
+    pub timestamps: Timestamps,
+    /// The core's confidence wording: high / low.
+    pub confidence: String,
+}
+
+/// What a FAT undelete run saw, on top of the records.
+#[derive(Debug, uniffi::Record)]
+pub struct FatResult {
+    pub records: Vec<FatFileRecord>,
+    /// `fat`, `fat16`, `fat32` or `exfat`, as the engine identified it.
+    pub kind: String,
+    pub cluster_size: u64,
+}
+
+#[uniffi::export]
+pub fn undelete_fat(
+    source_path: String,
+    options: UndeleteOptions,
+    cancel: Option<Arc<ScanCancel>>,
+) -> Result<FatResult, ScanError> {
+    let src = Source::open(&source_path).map_err(|e| scan_error(e.to_string()))?;
+    // dry_run stays false: a dry run is a CLI inventory mode, the app wants
+    // the files themselves. A sink-less options leaves the FsSink default.
+    let opts = lazarbyte_core::fat::Options {
+        out_dir: options.out_dir,
+        dry_run: false,
+        include_live: options.include_live,
+        min_size: options.min_size,
+        cancel: cancel.map(|c| Arc::clone(&c.inner)),
+        sink: None,
+    };
+    let (records, kind, cluster_size) =
+        lazarbyte_core::fat::recover(&src, options.offset, &opts, |_| {}).map_err(scan_error)?;
+    Ok(FatResult {
+        records: records
+            .iter()
+            .map(|r| FatFileRecord {
+                kind: r.kind.to_string(),
+                name: r.name.clone(),
+                ext: r.ext.clone(),
+                offset: r.offset,
+                size: r.size,
+                sha256: r.sha256.clone(),
+                validated: r.validated,
+                deleted: r.deleted,
+                path: r.path.clone(),
+                timestamps: timestamps_fat(r.timestamps),
+                confidence: r.confidence().to_string(),
+            })
+            .collect(),
+        kind: kind.to_string(),
+        cluster_size,
+    })
+}
+
+/// One file recovered from an ext2/3/4 volume.
+#[derive(Debug, uniffi::Record)]
+pub struct Ext4FileRecord {
+    pub inode: u64,
+    /// Path inside the volume, or `#inode_N` when no name was found.
+    pub name: String,
+    pub ext: String,
+    pub size: u64,
+    pub sha256: String,
+    /// Whole only when every block was read and the name was found.
+    pub validated: bool,
+    pub deleted: bool,
+    pub path: String,
+    pub timestamps: Timestamps,
+    /// The core's confidence wording: high / low.
+    pub confidence: String,
+}
+
+/// What an ext4 undelete run saw, on top of the records.
+#[derive(Debug, uniffi::Record)]
+pub struct Ext4Result {
+    pub records: Vec<Ext4FileRecord>,
+    pub block_size: u64,
+    pub inodes: u64,
+    pub volume_size: u64,
+    /// Deleted inodes whose block map was already cleared: named but gone.
+    pub map_gone: u64,
+}
+
+#[uniffi::export]
+pub fn undelete_ext4(
+    source_path: String,
+    options: UndeleteOptions,
+    cancel: Option<Arc<ScanCancel>>,
+) -> Result<Ext4Result, ScanError> {
+    let src = Source::open(&source_path).map_err(|e| scan_error(e.to_string()))?;
+    let opts = lazarbyte_core::ext4::Options {
+        out_dir: options.out_dir,
+        dry_run: false,
+        include_live: options.include_live,
+        min_size: options.min_size,
+        cancel: cancel.map(|c| Arc::clone(&c.inner)),
+        sink: None,
+    };
+    let (records, summary) =
+        lazarbyte_core::ext4::recover(&src, options.offset, &opts, |_| {}).map_err(scan_error)?;
+    Ok(Ext4Result {
+        records: records
+            .iter()
+            .map(|r| Ext4FileRecord {
+                inode: r.inode,
+                name: r.name.clone(),
+                ext: r.ext.clone(),
+                size: r.size,
+                sha256: r.sha256.clone(),
+                validated: r.validated,
+                deleted: r.deleted,
+                path: r.path.clone(),
+                timestamps: timestamps_ext4(r.timestamps),
+                confidence: r.confidence().to_string(),
+            })
+            .collect(),
+        block_size: summary.block_size,
+        inodes: summary.inodes,
+        volume_size: summary.volume_size,
+        map_gone: summary.map_gone,
+    })
+}
+
+#[cfg(test)]
+mod undelete_tests {
+    use super::*;
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+
+    struct Tmp(std::path::PathBuf);
+
+    impl Tmp {
+        /// Unpack a fixture next to the output directory the scan writes to.
+        fn image(dir_kind: &str, name: &str) -> (Self, String) {
+            let mut dir = std::env::temp_dir();
+            // The fixture name keeps parallel tests out of one another's way:
+            // two tests unpacking the same volume otherwise share a directory.
+            dir.push(format!(
+                "lazarbyte-ffi-{}-{}-{}",
+                dir_kind,
+                name.trim_end_matches(".gz")
+                    .trim_end_matches(".dd")
+                    .trim_end_matches(".img"),
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let gz = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../lazarbyte-cli/tests/fixtures")
+                .join(dir_kind)
+                .join(name);
+            let mut data = Vec::new();
+            GzDecoder::new(
+                std::fs::File::open(&gz).unwrap_or_else(|e| panic!("{}: {e}", gz.display())),
+            )
+            .read_to_end(&mut data)
+            .expect("fixture did not decompress");
+            let img = dir.join("disk.dd");
+            std::fs::write(&img, &data).unwrap();
+            (Tmp(dir), img.to_string_lossy().to_string())
+        }
+    }
+
+    impl Drop for Tmp {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn opts(out_dir: &std::path::Path) -> UndeleteOptions {
+        UndeleteOptions {
+            out_dir: out_dir.join("out").to_string_lossy().to_string(),
+            offset: 0,
+            include_live: false,
+            min_size: 0,
+        }
+    }
+
+    #[test]
+    fn undelete_fat_through_the_bridge_recovers_the_deleted_files() {
+        // exFAT, because it clears an in-use bit instead of overwriting a
+        // character, so the long name survives: the FAT16 variant only keeps
+        // a short name whose first letter the delete clobbered.
+        let (tmp, img) = Tmp::image("fat", "exfat.dd.gz");
+        let r = undelete_fat(img, opts(&tmp.0), None).expect("undelete_fat");
+        assert_eq!(r.kind, "exfat");
+        assert!(r.records.iter().all(|rec| rec.deleted));
+        let recovered = r
+            .records
+            .iter()
+            .find(|rec| rec.name == "deleted.txt" && rec.size == 880)
+            .expect("the deleted file must be found by name");
+        assert!(recovered.validated, "{:?}", recovered);
+        assert_eq!(recovered.confidence, "high");
+        assert!(
+            std::path::Path::new(&recovered.path).is_file(),
+            "{}",
+            recovered.path
+        );
+        assert_eq!(
+            std::fs::read(&recovered.path).unwrap(),
+            b"deleted evidence text\n".repeat(40)
+        );
+    }
+
+    #[test]
+    fn undelete_ext4_through_the_bridge_recovers_the_deleted_files() {
+        let (tmp, img) = Tmp::image("ext", "ext4.img.gz");
+        let r = undelete_ext4(img, opts(&tmp.0), None).expect("undelete_ext4");
+        assert!(r.records.iter().all(|rec| rec.deleted));
+        let recovered = r
+            .records
+            .iter()
+            .find(|rec| rec.name == "deleted.txt")
+            .unwrap();
+        assert!(recovered.validated, "{:?}", recovered);
+        assert!(
+            recovered.timestamps.deleted > 0,
+            "ext keeps the delete time"
+        );
+        assert!(
+            std::path::Path::new(&recovered.path).is_file(),
+            "{}",
+            recovered.path
+        );
+        assert_eq!(
+            std::fs::read(&recovered.path).unwrap(),
+            b"deleted ext evidence\n".repeat(44)
+        );
+    }
+
+    #[test]
+    fn a_cancelled_undelete_returns_without_writing_more() {
+        let (tmp, img) = Tmp::image("fat", "fat16.dd.gz");
+        let cancel = Arc::new(ScanCancel::new());
+        cancel.cancel();
+        let r = undelete_fat(img, opts(&tmp.0), Some(cancel)).expect("undelete_fat");
+        // Nothing had been written yet when the flag was checked, so the run
+        // comes back short but not broken.
+        assert!(r.records.is_empty(), "{:?}", r.records);
+    }
+
+    #[test]
+    fn undelete_rejects_an_unreadable_volume_with_a_clear_error() {
+        let mut dir = std::env::temp_dir();
+        dir.push(format!("lazarbyte-ffi-badvol-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let img = dir.join("garbage.bin");
+        let img = img.to_string_lossy().to_string();
+        std::fs::write(&img, [0x41u8; 65536]).unwrap();
+        let out = dir.join("out").to_string_lossy().to_string();
+        for r in [
+            undelete_fat(
+                img.clone(),
+                UndeleteOptions {
+                    out_dir: out.clone(),
+                    offset: 0,
+                    include_live: false,
+                    min_size: 0,
+                },
+                None,
+            )
+            .expect_err("fat must reject"),
+            undelete_ext4(
+                img,
+                UndeleteOptions {
+                    out_dir: out,
+                    offset: 0,
+                    include_live: false,
+                    min_size: 0,
+                },
+                None,
+            )
+            .expect_err("ext4 must reject"),
+        ] {
+            let ScanError::Failed(msg) = r;
+            assert!(
+                msg.to_lowercase().contains("fat") || msg.to_lowercase().contains("ext"),
+                "{msg}"
+            );
+        }
+    }
+}

@@ -411,6 +411,7 @@ dependencies = [
 name = "lazarbyte-ffi"
 version = "0.1.0"
 dependencies = [
+ "flate2",
  "lazarbyte-core",
  "uniffi",
 ]
