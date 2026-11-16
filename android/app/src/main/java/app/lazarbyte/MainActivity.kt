@@ -7,7 +7,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
@@ -76,7 +78,33 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
-                SourceScreen()
+                var screen by androidx.compose.runtime.remember {
+                    androidx.compose.runtime.mutableStateOf("scan")
+                }
+                Column(modifier = Modifier.fillMaxSize()) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        OutlinedButton(
+                            onClick = { screen = "scan" },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(if (screen == "scan") "● Scan" else "Scan")
+                        }
+                        OutlinedButton(
+                            onClick = { screen = "trash" },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(if (screen == "trash") "● Trash" else "Trash")
+                        }
+                    }
+                    if (screen == "scan") {
+                        SourceScreen()
+                    } else {
+                        TrashScreen()
+                    }
+                }
             }
         }
     }

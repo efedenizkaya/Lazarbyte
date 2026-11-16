@@ -136,7 +136,7 @@ private fun confidenceColor(confidence: String): Color = when (confidence) {
     else -> MaterialTheme.colorScheme.onSurface
 }
 
-private fun humanSize(bytes: Long): String = when {
+fun humanSize(bytes: Long): String = when {
     bytes >= 1 shl 30 -> "%.1f GB".format(bytes.toDouble() / (1 shl 30))
     bytes >= 1 shl 20 -> "%.1f MB".format(bytes.toDouble() / (1 shl 20))
     bytes >= 1 shl 10 -> "%.1f KB".format(bytes.toDouble() / (1 shl 10))
