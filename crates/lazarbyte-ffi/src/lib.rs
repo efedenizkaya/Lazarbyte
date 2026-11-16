@@ -302,26 +302,28 @@ fn carve_record(r: &carver::Record) -> CarveRecord {
 /// Poll a shared progress counter on a timer, reporting through the callback.
 ///
 /// The scan threads only bump counters; a watcher like this is how any front
-/// end sees them. It stops when the sender's flag drops, which happens when
-/// the scan call returns.
+/// end sees them. The `done` flag is the only reliable exit: a cancelled or
+/// budget-halted scan finishes with `scanned` below `total` forever, so a
+/// "reached the end" check alone would spin here for the life of the process
+/// and hang the scan call at its join.
 fn spawn_progress_watcher(
     progress: Arc<carver::Progress>,
-    callback: Box<dyn ProgressCallback>,
+    done: Arc<std::sync::atomic::AtomicBool>,
+    callback: Arc<dyn ProgressCallback>,
 ) -> std::thread::JoinHandle<()> {
+    use std::sync::atomic::Ordering;
     std::thread::spawn(move || {
-        loop {
+        while !done.load(Ordering::Relaxed) {
             std::thread::sleep(Duration::from_millis(200));
+            if done.load(Ordering::Relaxed) {
+                break;
+            }
             callback.on_progress(
                 progress.scanned(),
                 progress.total,
                 progress.files(),
                 progress.bytes_out(),
             );
-            // A final report would be nice, but the scan's own return value is
-            // the authoritative end: the caller moves on once it is back.
-            if progress.scanned() >= progress.total {
-                break;
-            }
         }
     })
 }
@@ -351,12 +353,33 @@ pub fn scan_carve(
         src.size()
     };
     let progress_counter = Arc::new(carver::Progress::new(scan_end.saturating_sub(opts.start)));
-    let watcher = progress.map(|cb| spawn_progress_watcher(Arc::clone(&progress_counter), cb));
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let callback: Option<Arc<dyn ProgressCallback>> = progress.map(Arc::from);
+    let watcher = callback.as_ref().map(|cb| {
+        spawn_progress_watcher(
+            Arc::clone(&progress_counter),
+            Arc::clone(&done),
+            Arc::clone(cb),
+        )
+    });
 
     let budget = OutputBudget::for_options(&opts);
-    let records =
-        carver::run_parallel_with_budget(src, &sigs, &opts, &budget, Some(&progress_counter))
-            .map_err(scan_error)?;
+    // The flag must clear before any early return, including the error path:
+    // an abandoned watcher would keep calling into the foreign callback for
+    // the life of the process. One final report goes out from this thread
+    // afterwards, so a cancelled scan's last update still lands.
+    let result =
+        carver::run_parallel_with_budget(src, &sigs, &opts, &budget, Some(&progress_counter));
+    done.store(true, std::sync::atomic::Ordering::Relaxed);
+    if let Some(cb) = &callback {
+        cb.on_progress(
+            progress_counter.scanned(),
+            progress_counter.total,
+            progress_counter.files(),
+            progress_counter.bytes_out(),
+        );
+    }
+    let records = result.map_err(scan_error)?;
 
     if let Some(w) = watcher {
         let _ = w.join();
@@ -492,6 +515,50 @@ mod tests {
         // nothing, because zeros hold no signatures.
         assert!(records.is_ok(), "{records:?}");
         assert!(records.unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_cancelled_scan_with_progress_returns_promptly() {
+        // Regression: the progress watcher used to exit only when scanned
+        // reached total, which a cancelled scan never does -- the call then
+        // hung at its join forever, and the app's cancel looked broken. With
+        // the done flag, the call returns promptly with partial results.
+        let tmp = Tmp::new("cancel-progress");
+        let img = tmp.0.join("img.bin");
+        std::fs::write(&img, vec![0u8; 1 << 20]).unwrap();
+        let cancel = Arc::new(ScanCancel::new());
+        cancel.cancel();
+
+        struct Fired(Arc<std::sync::atomic::AtomicBool>);
+        impl ProgressCallback for Fired {
+            fn on_progress(&self, _scanned: u64, _total: u64, _files: u64, _bytes_out: u64) {
+                self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+        let fired = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cb: Box<dyn ProgressCallback> = Box::new(Fired(Arc::clone(&fired)));
+
+        let o = CarveOptions {
+            out_dir: tmp.0.join("out").to_string_lossy().to_string(),
+            ..CarveOptions::default()
+        };
+        let started = std::time::Instant::now();
+        let records = scan_carve(
+            Arc::new(
+                SourceHandle::from_path(img.to_string_lossy().to_string()).expect("open source"),
+            ),
+            o,
+            Some(cb),
+            Some(cancel),
+        )
+        .expect("a cancelled scan is not an error");
+        assert!(records.is_empty());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "the watcher kept the call alive: {:?}",
+            started.elapsed()
+        );
+        assert!(fired.load(std::sync::atomic::Ordering::Relaxed));
     }
 
     #[test]
