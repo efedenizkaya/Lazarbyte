@@ -24,6 +24,27 @@ import uniffi.lazarbyte_ffi.SourceHandle
 class ScanService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * Android 14+ gives a dataSync foreground service about six hours per
+     * day, then calls this and expects the service to stop within seconds --
+     * anything else is a crash. A scan this long is beyond the MVP's honest
+     * scope; stopping gracefully leaves what was carved on disk, and the
+     * manifest records the run as it was.
+     */
+
+    /** The one-argument form Android 14 and 15 call; same graceful stop. */
+    override fun onTimeout(startId: Int) {
+        ScanRepository.requestCancel()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        ScanRepository.requestCancel()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     override fun onStartCommand(intent: Intent, flags: Int, startId: Int): Int {
         val fd = intent.getIntExtra(EXTRA_FD, -1)
         val outDir = intent.getStringExtra(EXTRA_OUT_DIR) ?: filesDir.resolve("scans/default").absolutePath

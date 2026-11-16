@@ -56,6 +56,12 @@ object WatchRepository {
         val set = prefs.getStringSet(KEY_FOLDERS, emptySet())?.toMutableSet() ?: mutableSetOf()
         set -= treeUri
         prefs.edit().putStringSet(KEY_FOLDERS, set).apply()
+        // Stop watching means stop keeping: the captured copies of the
+        // unwatched folder would otherwise sit in private storage forever.
+        relativePrefix(treeUri)?.let { prefix ->
+            capturedDir(context, prefix).deleteRecursively()
+        }
+        prefs.edit().remove(KEY_MANIFEST_PREFIX + (relativePrefix(treeUri) ?: "").hashCode()).apply()
         load(context)
     }
 
@@ -73,12 +79,15 @@ object WatchRepository {
     /**
      * One sync pass over every watched folder. Rows still present are copied
      * when new or changed; rows that vanished from the media index keep their
-     * last captured copy, and the disappearance is reported.
+     * last captured copy, and the disappearance is reported. Copies stop at
+     * the free-space floor -- AGENTS.md §3's "no scan may fill the disk"
+     * applies to this output as much as to a carve.
      */
     fun sync(context: Context): String {
         var copied = 0
         var watched = 0
         var disappeared = 0
+        var outOfRoom = false
         for (tree in folders.value) {
             val prefix = relativePrefix(tree) ?: continue
             val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -124,6 +133,14 @@ object WatchRepository {
                     val rowModified = if (cursor.isNull(modified)) 0 else cursor.getLong(modified)
                     if (known[rowId] == rowModified && rowModified != 0L) continue
                     val rowName = cursor.getString(name) ?: continue
+                    if (!outOfRoom) {
+                        val free = android.os.StatFs(context.filesDir.path).availableBytes
+                        if (free < FREE_SPACE_FLOOR) {
+                            outOfRoom = true
+                            continue
+                        }
+                    }
+                    if (outOfRoom) continue
                     val dir = capturedDir(context, prefix)
                     dir.mkdirs()
                     val target = java.io.File(dir, rowName)
@@ -150,8 +167,20 @@ object WatchRepository {
                 known.entries.joinToString(";") { "${it.key}:${it.value}" },
             ).apply()
         }
-        val summary = "$watched watched file(s), $copied captured, $disappeared vanished"
+        val summary = buildString {
+            append("$watched watched file(s), $copied captured, $disappeared vanished")
+            if (outOfRoom) {
+                append("; capture stopped: the device is low on storage")
+            }
+        }
         lastSync.value = summary
         return summary
     }
+
+    /**
+     * Copies stop while the private volume has less than this free; the user
+     * sees the reason in the sync summary. Nothing is deleted to make room:
+     * freeing storage is the user's call, not the app's.
+     */
+    private const val FREE_SPACE_FLOOR = 200L * 1024 * 1024
 }

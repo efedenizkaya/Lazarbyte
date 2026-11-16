@@ -37,6 +37,7 @@ import java.io.File
  */
 class MainActivity : ComponentActivity() {
     private var source: SourceHandle? = null
+    private val NOTIFICATIONS_REQUEST_CODE = 41
     /** The duplicate descriptor waiting for a scan; Rust never sees it until startScan. */
     private var pendingScanFd: android.os.ParcelFileDescriptor? = null
     private var sourceInfo by mutableStateOf("No image chosen.")
@@ -80,6 +81,7 @@ class MainActivity : ComponentActivity() {
         // service when folders are watched.
         WatchRepository.load(this)
         CaptureService.startIfWatched(this)
+        askForNotificationsOnce()
         setContent {
             MaterialTheme {
                 var screen by androidx.compose.runtime.remember {
@@ -121,6 +123,24 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    /**
+     * Android 13+ suppresses every notification until this runtime permission
+     * is granted -- including the foreground-service notifications that tell
+     * the user a scan or a watch is running. Asking once at startup keeps the
+     * services visible; a denial does not stop them, only hides the badges.
+     */
+    private fun askForNotificationsOnce() {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(
+                arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                NOTIFICATIONS_REQUEST_CODE,
+            )
+        }
+    }
+
     private fun openSource(uri: Uri) {
         source?.close()
         pendingScanFd?.close()
@@ -141,7 +161,15 @@ class MainActivity : ComponentActivity() {
             // descriptor -- Kotlin must not touch the number again.
             val servicePfd = pfd.dup()
             val fd = pfd.detachFd()
-            val handle = SourceHandle.fromFd(fd)
+            val handle = try {
+                SourceHandle.fromFd(fd)
+            } catch (bridgeError: Exception) {
+                // fromFd owns the descriptor the moment it is constructed, so
+                // even a failure leaves the number in Rust's hands; the
+                // duplicate meant for the service is still ours, close it.
+                servicePfd.close()
+                throw bridgeError
+            }
             source = handle
             pendingScanFd = servicePfd
             pickedName = uri.lastPathSegment
@@ -154,7 +182,13 @@ class MainActivity : ComponentActivity() {
 
     /** Starts a scan; the service runs it in the foreground. */
     private fun startScan(deep: Boolean) {
-        val pfd = pendingScanFd ?: return
+        val pfd = pendingScanFd
+        if (pfd == null) {
+            // The duplicate descriptor is spent after one scan; say so rather
+            // than letting the button click silently do nothing.
+            sourceError = "Pick the image again to scan it another time."
+            return
+        }
         val dir = File(getExternalFilesDir(null), "scans/${System.currentTimeMillis()}")
         dir.mkdirs()
         // Ownership of the duplicate descriptor moves to the service now; the
@@ -225,13 +259,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
             OutlinedButton(
-                enabled = source != null && state !is ScanState.Running,
+                enabled = pendingScanFd != null && state !is ScanState.Running,
                 onClick = { startScan(deep = false) },
             ) {
                 Text("Quick scan (FAT/exFAT)")
             }
             OutlinedButton(
-                enabled = source != null && state !is ScanState.Running,
+                enabled = pendingScanFd != null && state !is ScanState.Running,
                 onClick = { startScan(deep = true) },
             ) {
                 Text("Deep scan (carve)")

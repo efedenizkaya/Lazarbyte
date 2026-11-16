@@ -67,6 +67,28 @@ class CaptureService : Service() {
         return START_STICKY
     }
 
+    /**
+     * Android 14+ caps a dataSync foreground service at about six hours per
+     * day, then calls this: the service must stop within seconds or the
+     * system crashes the app. The watch stops gracefully and says so; the
+     * next app launch (or the next folder the user adds) restarts it.
+     */
+
+    /** The one-argument form Android 14 and 15 call; same graceful stop. */
+    override fun onTimeout(startId: Int) {
+        WatchRepository.lastSync.value = "The watch paused: Android ended this " +
+            "foreground session. Reopen the app to resume capturing."
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        WatchRepository.lastSync.value = "The watch paused: Android ended this " +
+            "foreground session. Reopen the app to resume capturing."
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
     override fun onDestroy() {
         running = false
         observer?.let { contentResolver.unregisterContentObserver(it) }
