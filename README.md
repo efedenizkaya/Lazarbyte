@@ -463,6 +463,17 @@ What it honestly cannot do on Android, so nobody wastes an evening on it:
 - **Every result carries a confidence label** -- verified, high, low, failed,
   in the core's own words. Nothing is announced as "recovered for sure"; the
   labels mean what the engines could actually prove about the bytes.
+- **Two things beyond carving** (Android 11+): the shared trash browser, which
+  lists trashed media with its purge deadline and restores it through the
+  system's own consent dialog; and watched folders, which continuously copy
+  watched media into the app's private storage as it changes -- so a later
+  deletion or trash purge finds the file already safe. Root-less Android
+  cannot stop a deletion; nothing here claims otherwise.
+- **Trash visibility limits, honestly stated**: trashed media files (images,
+  videos, audio) are listed with the media-read permissions; trashed
+  non-media files of other apps are invisible to any app without
+  MANAGE_EXTERNAL_STORAGE, which this app refuses to request. Restores always
+  show the system's consent dialog, and a "no" is reported as a "no".
 
 Build it yourself or take the APK from CI: `android/` is a Gradle project;
 `./gradlew :app:assembleDebug` in that directory produces an installable APK
