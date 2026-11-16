@@ -691,14 +691,16 @@ pub fn containment_filter(records: Vec<Record>, sink: &dyn Sink) -> Vec<Record> 
     let mut out: Vec<Record> = Vec::with_capacity(sorted.len());
     let mut covered_end: u64 = 0;
     for rec in sorted {
-        if covered_end > 0 && rec.offset + rec.size <= covered_end {
+        // saturating: offsets and sizes come from the image, and §3 wants
+        // the arithmetic loud-or-safe, never a wrap.
+        if covered_end > 0 && rec.offset.saturating_add(rec.size) <= covered_end {
             if !rec.path.is_empty() {
                 sink.remove(&rec.path);
             }
             continue;
         }
         if rec.validated {
-            covered_end = covered_end.max(rec.offset + rec.size);
+            covered_end = covered_end.max(rec.offset.saturating_add(rec.size));
         }
         out.push(rec);
     }
