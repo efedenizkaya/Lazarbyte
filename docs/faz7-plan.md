@@ -1,5 +1,9 @@
 # Faz 7 implementation plan (owner-approved 2026-11-16)
 
+**Status: implemented.** The trash browser, watched-folder capture and the
+README documentation shipped in commits 46731fc, bce0663 and 3c27b3b; the
+handoff notes below are kept for the API facts and the risk register.
+
 Work happens in a fresh session; this file is the handoff. Follow AGENTS.md §6/§7
 (checks + small commits) as everywhere else.
 
