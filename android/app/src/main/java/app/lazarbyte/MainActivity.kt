@@ -76,6 +76,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Load the watch list before the UI reads it, and resume the capture
+        // service when folders are watched.
+        WatchRepository.load(this)
+        CaptureService.startIfWatched(this)
         setContent {
             MaterialTheme {
                 var screen by androidx.compose.runtime.remember {
@@ -98,11 +102,19 @@ class MainActivity : ComponentActivity() {
                         ) {
                             Text(if (screen == "trash") "● Trash" else "Trash")
                         }
+                        OutlinedButton(
+                            onClick = { screen = "watch" },
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            Text(if (screen == "watch") "● Watch" else "Watch")
+                        }
                     }
                     if (screen == "scan") {
                         SourceScreen()
-                    } else {
+                    } else if (screen == "trash") {
                         TrashScreen()
+                    } else {
+                        WatchScreen()
                     }
                 }
             }
