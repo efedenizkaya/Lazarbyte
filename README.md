@@ -441,6 +441,34 @@ be reported in a different shape long after the evidence is detached.
 bcrumb-rs --from-manifest out/manifest.json --html report.html --csv files.csv
 ```
 
+## The Android app (GitHub-only distribution)
+
+Lazarbyte is also an Android app built on this core: pick an image or an SD
+card through the Storage Access Framework, run a quick scan (FAT/exFAT
+undelete) or a deep scan (carving), browse what came back with per-file
+confidence labels, and export the files you want to your own storage. There
+is no Play Store listing and never any network use; the app is installed
+from an APK on its GitHub releases page.
+
+What it honestly cannot do on Android, so nobody wastes an evening on it:
+
+- **Internal storage is effectively unrecoverable.** Android's /data partition
+  uses file-based encryption and the flash is TRIMmed aggressively; deleted
+  files there are gone at the hardware level, not waiting under the surface.
+  That is true of every Android recovery tool that works without root.
+- **What works without root**: images and dumps on storage you can open
+  through SAF -- SD cards and USB-OTG media with FAT/exFAT, or raw disk image
+  files. Deleted-file recovery is strongest on exFAT/FAT media; carving works
+  on any image you can open.
+- **Every result carries a confidence label** -- verified, high, low, failed,
+  in the core's own words. Nothing is announced as "recovered for sure"; the
+  labels mean what the engines could actually prove about the bytes.
+
+Build it yourself or take the APK from CI: `android/` is a Gradle project;
+`./gradlew :app:assembleDebug` in that directory produces an installable APK
+(the build calls `cargo ndk` for the Rust core first, which needs the Android
+NDK). CI builds it on every push as an artifact.
+
 ## Not implemented
 
 Named so an examination is not planned around something that is not here:

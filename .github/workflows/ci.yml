@@ -125,3 +125,29 @@ jobs:
             echo "$so: LOAD alignment $align"
             test "$align" = "0x4000"
           done
+
+  apk:
+    # The app ships from GitHub only: this job builds the installable APK on
+    # every push and uploads it as an artifact, so a release page can attach
+    # it. Debug-signed -- a real signing key is a release-time task, not CI's.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, x86_64-linux-android
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - name: Build the APK
+        run: ./gradlew :app:assembleDebug
+        working-directory: android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lazarbyte-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
