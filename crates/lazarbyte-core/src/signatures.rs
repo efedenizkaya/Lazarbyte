@@ -423,6 +423,19 @@ pub const GROUPS: &[(&str, &[&str])] = &[
 ];
 
 /// Parse "jpg,png,..." into signature indices, erroring on unknown names.
+/// Extensions the signature table can name: every signature's own name plus
+/// every alias and group name, lower-case, without dots. The triage summary
+/// uses it to flag recovered names whose extension is unrecognized.
+pub fn known_extensions() -> std::collections::HashSet<String> {
+    let mut set: std::collections::HashSet<String> = SIGNATURES
+        .iter()
+        .map(|s| s.name.to_ascii_lowercase())
+        .collect();
+    set.extend(ALIASES.iter().map(|(a, _)| a.to_ascii_lowercase()));
+    set.extend(GROUPS.iter().map(|(g, _)| g.to_ascii_lowercase()));
+    set
+}
+
 pub fn resolve_types(spec: &str) -> Result<Vec<&'static Signature>, String> {
     let mut out: Vec<&'static Signature> = Vec::new();
     for tok in spec.split(',') {

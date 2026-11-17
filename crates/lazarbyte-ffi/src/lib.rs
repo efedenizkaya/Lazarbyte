@@ -456,6 +456,74 @@ mod tests {
     }
 
     #[test]
+    fn summarize_reports_duplicates_and_counts() {
+        let rows = vec![
+            TriageRowInput {
+                kind: "fat".into(),
+                name: "deleted.txt".into(),
+                ext: "txt".into(),
+                size: 880,
+                sha256: "dup".into(),
+                validated: true,
+                modified: Some(1700000000),
+            },
+            TriageRowInput {
+                kind: "jpg".into(),
+                name: "f_1.jpg".into(),
+                ext: "jpg".into(),
+                size: 880,
+                sha256: "dup".into(),
+                validated: true,
+                modified: None,
+            },
+            TriageRowInput {
+                kind: "fat".into(),
+                name: "inner.bin".into(),
+                ext: "bin".into(),
+                size: 5120,
+                sha256: "unique".into(),
+                validated: false,
+                modified: Some(0),
+            },
+        ];
+        let t = summarize_results(rows);
+        assert_eq!(t.total_files, 3);
+        assert_eq!(t.total_bytes, 880 + 880 + 5120);
+        assert_eq!(t.duplicate_sha256, vec!["dup".to_string()]);
+        assert_eq!(t.duplicate_rows, 2);
+        assert_eq!(t.by_kind[0].kind, "fat");
+        assert_eq!(t.unvalidated, 1);
+        assert_eq!(t.modified_min, Some(1700000000));
+        assert_eq!(t.modified_max, Some(1700000000));
+    }
+
+    #[test]
+    fn verify_recovered_hashes_and_compares() {
+        use sha2::Digest;
+        let tmp = Tmp::new("verify");
+        let p = tmp.0.join("f.bin");
+        std::fs::write(&p, b"hello").unwrap();
+        let sha = format!("{:x}", sha2::Sha256::digest(b"hello"));
+
+        let out = verify_recovered(vec![VerifyInput {
+            path: p.to_string_lossy().to_string(),
+            sha256: sha,
+        }]);
+        assert!(out[0].ok);
+        assert_eq!(
+            out[0].actual_sha256,
+            format!("{:x}", sha2::Sha256::digest(b"hello"))
+        );
+
+        let out = verify_recovered(vec![VerifyInput {
+            path: "Z:/definitely/not/here".into(),
+            sha256: "anything".into(),
+        }]);
+        assert!(!out[0].ok);
+        assert!(out[0].actual_sha256.is_empty());
+    }
+
+    #[test]
     fn carving_through_the_bridge_matches_the_cli_record_shape() {
         let tmp = Tmp::new("carve");
         let img = tmp.0.join("img.bin");
@@ -973,4 +1041,160 @@ mod undelete_tests {
             );
         }
     }
+}
+
+// --- triage and re-verification exports (backlog P0) ---
+
+/// One row of a scan result, normalized across engines, as the triage input.
+#[derive(Debug, uniffi::Record)]
+pub struct TriageRowInput {
+    pub kind: String,
+    pub name: String,
+    pub ext: String,
+    pub size: u64,
+    pub sha256: String,
+    pub validated: bool,
+    /// Last modification time when the engine knows it (undelete modes);
+    /// `None` for carved files, which carry no timestamps.
+    pub modified: Option<u64>,
+}
+
+/// Files per format family.
+#[derive(Debug, uniffi::Record)]
+pub struct KindCount {
+    pub kind: String,
+    pub files: u64,
+    pub bytes: u64,
+}
+
+/// One of the biggest recovered files.
+#[derive(Debug, uniffi::Record)]
+pub struct LargestFile {
+    pub name: String,
+    pub kind: String,
+    pub size: u64,
+}
+
+/// The shape of the accumulated scan results.
+#[derive(Debug, uniffi::Record)]
+pub struct TriageSummary {
+    pub total_files: u64,
+    pub total_bytes: u64,
+    /// Per format family, largest total first.
+    pub by_kind: Vec<KindCount>,
+    /// Up to the five biggest files.
+    pub largest: Vec<LargestFile>,
+    /// SHA-256 values found on more than one row: byte-identical files a
+    /// quick scan and a deep scan both found, for example.
+    pub duplicate_sha256: Vec<String>,
+    pub duplicate_rows: u64,
+    /// Rows whose extension the signature table does not recognise.
+    pub unknown_extensions: u64,
+    /// Modified-time span over rows that carry a time; `None` when none do.
+    pub modified_min: Option<u64>,
+    pub modified_max: Option<u64>,
+    /// Rows the engines could not fully account for.
+    pub unvalidated: u64,
+}
+
+/// Summarize accumulated scan results: per-kind counts, biggest files,
+/// byte-identical duplicates, unrecognized extensions, the modified-time
+/// span and the unvalidated count. Pure arithmetic over the rows; no I/O.
+#[uniffi::export]
+pub fn summarize_results(rows: Vec<TriageRowInput>) -> TriageSummary {
+    let known = lazarbyte_core::signatures::known_extensions();
+    let core_rows: Vec<lazarbyte_core::triage::TriageRow> = rows
+        .into_iter()
+        .map(|r| lazarbyte_core::triage::TriageRow {
+            kind: r.kind,
+            name: r.name,
+            ext: r.ext,
+            size: r.size,
+            sha256: r.sha256,
+            validated: r.validated,
+            modified: r.modified.filter(|m| *m != 0),
+        })
+        .collect();
+    let t = lazarbyte_core::triage::summarize(&core_rows, &known);
+    TriageSummary {
+        total_files: t.total_files,
+        total_bytes: t.total_bytes,
+        by_kind: t
+            .by_kind
+            .into_iter()
+            .map(|k| KindCount {
+                kind: k.kind,
+                files: k.files,
+                bytes: k.bytes,
+            })
+            .collect(),
+        largest: t
+            .largest
+            .into_iter()
+            .map(|l| LargestFile {
+                name: l.name,
+                kind: l.kind,
+                size: l.size,
+            })
+            .collect(),
+        duplicate_sha256: t.duplicate_sha256,
+        duplicate_rows: t.duplicate_rows,
+        unknown_extensions: t.unknown_extensions,
+        modified_min: t.modified_min,
+        modified_max: t.modified_max,
+        unvalidated: t.unvalidated,
+    }
+}
+
+/// One re-verification result: the file's actual SHA-256 against what the
+/// manifest claims.
+#[derive(Debug, uniffi::Record)]
+pub struct VerifyOutcome {
+    pub path: String,
+    /// The file was readable and its hash matches the manifest.
+    pub ok: bool,
+    /// What was actually hashed; empty when the file was unreadable.
+    pub actual_sha256: String,
+}
+
+/// Hash every given recovered file again and compare with the manifest's
+/// SHA-256. This is the chain-of-custody check: the bytes on disk still are
+/// the bytes the scan reported. Reads in chunks, so a large file costs no
+/// more memory than a small one.
+#[uniffi::export]
+pub fn verify_recovered(items: Vec<VerifyInput>) -> Vec<VerifyOutcome> {
+    use sha2::Digest;
+    items
+        .into_iter()
+        .map(|item| {
+            let mut hasher = sha2::Sha256::new();
+            let read = std::fs::File::open(&item.path).and_then(|mut f| {
+                std::io::copy(&mut f, &mut hasher)?;
+                Ok(())
+            });
+            match read {
+                Ok(()) => {
+                    let actual = format!("{:x}", hasher.finalize());
+                    VerifyOutcome {
+                        path: item.path,
+                        ok: actual == item.sha256,
+                        actual_sha256: actual,
+                    }
+                }
+                Err(_) => VerifyOutcome {
+                    path: item.path,
+                    ok: false,
+                    actual_sha256: String::new(),
+                },
+            }
+        })
+        .collect()
+}
+
+/// One re-verification request: where the file is and what the manifest
+/// claims its SHA-256 is.
+#[derive(Debug, uniffi::Record)]
+pub struct VerifyInput {
+    pub path: String,
+    pub sha256: String,
 }

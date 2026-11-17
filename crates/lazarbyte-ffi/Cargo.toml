@@ -20,6 +20,9 @@ uniffi = { version = "0.32", default-features = false }
 # FAT/exFAT and ext. ntfs/hfs/apfs/ewf/bitlocker/containers/grep/customsig stay
 # out of the APK; the desktop CLI keeps them.
 lazarbyte-core = { path = "../lazarbyte-core", default-features = false }
+# Already a workspace dependency the core uses; the re-verification export
+# hashes recovered files with it (no new dependency).
+sha2 = { workspace = true }
 
 
 [dev-dependencies]

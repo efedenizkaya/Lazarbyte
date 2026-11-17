@@ -23,6 +23,8 @@ data class RecoveredItem(
     val path: String,
     /** The core's confidence wording: verified / failed / high / low. */
     val confidence: String,
+    /** Last modification time when the engine knows it; 0 otherwise. */
+    val modified: Long,
 )
 
 /** What a scan is doing right now; observed by the activity and the service. */
@@ -42,6 +44,14 @@ sealed class ScanState {
 object ScanRepository {
     val state = androidx.compose.runtime.mutableStateOf<ScanState>(ScanState.Idle)
 
+    /**
+     * Every result accumulated across this session's scans, quick and deep
+     * together. The triage summary and its duplicate marking run over this
+     * combined list, which is what makes a quick scan and a carve that found
+     * the same bytes surface once instead of twice.
+     */
+    val results = androidx.compose.runtime.mutableStateOf<List<RecoveredItem>>(emptyList())
+
     var cancel: ScanCancel? = null
         private set
 
@@ -49,9 +59,10 @@ object ScanRepository {
         cancel?.cancel()
     }
 
-    /** Forget the last scan's results, back to idle. */
+    /** Forget the accumulated results, back to idle. */
     fun reset() {
         state.value = ScanState.Idle
+        results.value = emptyList()
     }
 
     private class Relay(private val label: String) : ProgressCallback {
@@ -77,13 +88,16 @@ object ScanRepository {
                 minSize = 0UL,
             )
             val result = uniffi.lazarbyte_ffi.undeleteFat(source, opts, cancel)
-            state.value = ScanState.Done(result.records.map { r ->
+            val items = result.records.map { r ->
                 RecoveredItem(
                     kind = r.kind, name = r.name, ext = r.ext, offset = r.offset.toLong(),
                     size = r.size.toLong(), sha256 = r.sha256, validated = r.validated,
                     deleted = r.deleted, path = r.path, confidence = r.confidence,
+                    modified = r.timestamps.modified.toLong(),
                 )
-            })
+            }
+            results.value = results.value + items
+            state.value = ScanState.Done(items)
         } catch (e: Exception) {
             state.value = ScanState.Failed(e.message ?: e.javaClass.simpleName)
         }
@@ -97,14 +111,16 @@ object ScanRepository {
         try {
             val opts = uniffi.lazarbyte_ffi.mobileCarveOptions().copy(outDir = outDir)
             val records = uniffi.lazarbyte_ffi.scanCarve(source, opts, Relay(label), cancel)
-            state.value = ScanState.Done(records.map { r ->
+            val items = records.map { r ->
                 RecoveredItem(
                     kind = r.kind, name = r.path.substringAfterLast('/'), ext = r.ext,
                     offset = r.offset.toLong(), size = r.size.toLong(), sha256 = r.sha256,
                     validated = r.validated, deleted = false, path = r.path,
-                    confidence = r.confidence,
+                    confidence = r.confidence, modified = 0,
                 )
-            })
+            }
+            results.value = results.value + items
+            state.value = ScanState.Done(items)
         } catch (e: Exception) {
             state.value = ScanState.Failed(e.message ?: e.javaClass.simpleName)
         }

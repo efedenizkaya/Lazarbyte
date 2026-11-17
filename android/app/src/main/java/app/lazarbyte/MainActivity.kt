@@ -50,6 +50,9 @@ class MainActivity : ComponentActivity() {
             openSource(uri)
         }
 
+    /** Re-verification results: recovered path -> the hash matched. */
+    private var verified by mutableStateOf<Map<String, Boolean>>(emptyMap())
+
     /**
      * Exporting a recovered file: the user names a destination through SAF
      * and the file's bytes are copied there. One document per export; the
@@ -64,6 +67,21 @@ class MainActivity : ComponentActivity() {
                 exportTo(uri, item)
             }
         }
+
+    /**
+     * Chain-of-custody check: hash the recovered bytes again and compare
+     * with what the manifest reported. Runs on its own thread -- hashing a
+     * large file takes time, and the UI updates when the batch lands.
+     */
+    private fun reVerify(items: List<RecoveredItem>) {
+        Thread {
+            val inputs = items.map {
+                uniffi.lazarbyte_ffi.VerifyInput(path = it.path, sha256 = it.sha256)
+            }
+            val outcomes = uniffi.lazarbyte_ffi.verifyRecovered(inputs)
+            verified = outcomes.associate { it.path to it.ok }
+        }.start()
+    }
 
     private fun exportTo(uri: Uri, item: RecoveredItem) {
         runCatching {
@@ -234,13 +252,20 @@ class MainActivity : ComponentActivity() {
                 }
                 is ScanState.Done -> {
                     androidx.compose.foundation.layout.Box(modifier = Modifier.fillMaxSize()) {
+                        // The summary covers the accumulated results, not just
+                        // this scan, so quick and deep scans reconcile here.
                         ResultsScreen(
-                            items = s.items,
+                            items = ScanRepository.results.value,
                             onExport = { item ->
                                 pendingExport = item
                                 exportFile.launch(item.name)
                             },
-                            onClear = { ScanRepository.reset() },
+                            onClear = {
+                                ScanRepository.reset()
+                                verified = emptyMap()
+                            },
+                            onVerifyAll = { reVerify(ScanRepository.results.value) },
+                            verified = verified,
                         )
                     }
                 }
