@@ -423,6 +423,22 @@ pub const GROUPS: &[(&str, &[&str])] = &[
 ];
 
 /// Parse "jpg,png,..." into signature indices, erroring on unknown names.
+/// Recognise a file's type from its leading bytes, without trusting the
+/// name it carries. Every signature's magics are checked against the head
+/// of the file; the first table order match wins. `head` is whatever the
+/// caller read first -- a few hundred bytes cover every magic this table
+/// has, and a shorter head simply cannot match a longer magic.
+pub fn identify_head(head: &[u8]) -> Option<&'static Signature> {
+    for sig in SIGNATURES {
+        for magic in sig.magics {
+            if head.starts_with(magic) {
+                return Some(sig);
+            }
+        }
+    }
+    None
+}
+
 /// Extensions the signature table can name: every signature's own name plus
 /// every alias and group name, lower-case, without dots. The triage summary
 /// uses it to flag recovered names whose extension is unrecognized.
@@ -464,4 +480,31 @@ pub fn resolve_types(spec: &str) -> Result<Vec<&'static Signature>, String> {
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identify_head_recognises_leading_magics() {
+        let jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+        let sig = identify_head(&jpeg).expect("jpeg must be recognised");
+        assert_eq!(sig.name, "jpg");
+
+        let png = b"\x89PNG\r\n\x1a\n and more bytes";
+        let sig = identify_head(png).expect("png must be recognised");
+        assert_eq!(sig.name, "png");
+
+        assert!(identify_head(b"plain text, nothing magical").is_none());
+        assert!(identify_head(&[]).is_none());
+    }
+
+    #[test]
+    fn known_extensions_contains_names_and_aliases() {
+        let known = known_extensions();
+        assert!(known.contains("jpg"));
+        assert!(known.contains("jpeg"), "an alias must be known too");
+        assert!(known.contains("images"), "a group must be known too");
+    }
 }

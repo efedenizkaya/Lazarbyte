@@ -406,7 +406,7 @@ mod tests {
         out
     }
 
-    struct Tmp(std::path::PathBuf);
+    pub(crate) struct Tmp(pub std::path::PathBuf);
 
     impl Tmp {
         fn new(tag: &str) -> Self {
@@ -521,6 +521,44 @@ mod tests {
         }]);
         assert!(!out[0].ok);
         assert!(out[0].actual_sha256.is_empty());
+    }
+
+    #[test]
+    fn identify_files_reads_content_not_names() {
+        let tmp = Tmp::new("identify");
+        let jpeg = tmp.0.join("actually_a_jpeg.txt"); // the name lies
+        let mut head = vec![0xFF, 0xD8, 0xFF, 0xE0];
+        head.extend_from_slice(b" JFIF");
+        std::fs::write(&jpeg, &head).unwrap();
+
+        let out = identify_files(vec![jpeg.to_string_lossy().to_string()]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].detected.as_deref(), Some("jpg"));
+        assert!(
+            !out[0].matches_extension,
+            "the .txt name must not claim a match"
+        );
+
+        // A text file matches no signature and no extension.
+        let plain = tmp.0.join("notes.txt");
+        std::fs::write(&plain, b"nothing magical here").unwrap();
+        let out = identify_files(vec![plain.to_string_lossy().to_string()]);
+        assert!(out[0].detected.is_none());
+        assert!(!out[0].matches_extension);
+    }
+
+    #[test]
+    fn probe_reads_the_volume_family_from_superblocks() {
+        let (tmp, img) = undelete_tests::Tmp::image("fat", "exfat.dd.gz");
+        let src = Arc::new(SourceHandle::from_path(img.clone()).expect("open source"));
+        let p = src.probe();
+        assert_eq!(p.size_bytes, 8_388_608);
+        assert_eq!(p.fat_kind.as_deref(), Some("exfat"));
+        assert!(p.ext_kind.is_none());
+        // Dropping the handle is the caller's only cleanup; probe must not
+        // have consumed anything.
+        drop(src);
+        drop(tmp);
     }
 
     #[test]
@@ -872,21 +910,26 @@ mod undelete_tests {
     use flate2::read::GzDecoder;
     use std::io::Read;
 
-    struct Tmp(std::path::PathBuf);
+    pub(crate) struct Tmp(std::path::PathBuf);
 
     impl Tmp {
         /// Unpack a fixture next to the output directory the scan writes to.
-        fn image(dir_kind: &str, name: &str) -> (Self, String) {
+        pub(crate) fn image(dir_kind: &str, name: &str) -> (Self, String) {
             let mut dir = std::env::temp_dir();
             // The fixture name keeps parallel tests out of one another's way:
             // two tests unpacking the same volume otherwise share a directory.
+            // A sequence number as well: two tests can unpack the same
+            // fixture, and only the process id would leave them racing.
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static SEQ: AtomicU64 = AtomicU64::new(0);
             dir.push(format!(
-                "lazarbyte-ffi-{}-{}-{}",
+                "lazarbyte-ffi-{}-{}-{}-{}",
                 dir_kind,
                 name.trim_end_matches(".gz")
                     .trim_end_matches(".dd")
                     .trim_end_matches(".img"),
-                std::process::id()
+                std::process::id(),
+                SEQ.fetch_add(1, Ordering::Relaxed)
             ));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
@@ -1197,4 +1240,109 @@ pub fn verify_recovered(items: Vec<VerifyInput>) -> Vec<VerifyOutcome> {
 pub struct VerifyInput {
     pub path: String,
     pub sha256: String,
+}
+
+// --- identify and probe exports (backlog P1) ---
+
+/// What a recovered file's bytes say its type is, versus what its name says.
+#[derive(Debug, uniffi::Record)]
+pub struct IdentifyOutcome {
+    pub path: String,
+    /// The signature family the leading bytes matched, if any.
+    pub detected: Option<String>,
+    /// The name's extension agrees with the detected content.
+    pub matches_extension: bool,
+}
+
+/// Identify a batch of recovered files from their leading bytes. Rows whose
+/// bytes match no signature get `detected = None` -- a carved fragment, or a
+/// type this table lacks; the row says so rather than guessing.
+#[uniffi::export]
+pub fn identify_files(paths: Vec<String>) -> Vec<IdentifyOutcome> {
+    use std::io::Read;
+    paths
+        .into_iter()
+        .map(|path| {
+            let head = std::fs::File::open(&path).and_then(|mut f| {
+                let mut buf = vec![0u8; 4096];
+                let mut got = 0;
+                loop {
+                    let n = f.read(&mut buf[got..])?;
+                    if n == 0 {
+                        break;
+                    }
+                    got += n;
+                    if got == buf.len() {
+                        break;
+                    }
+                }
+                buf.truncate(got);
+                Ok(buf)
+            });
+            match head {
+                Ok(head) => {
+                    let detected = lazarbyte_core::signatures::identify_head(&head)
+                        .map(|sig| sig.name.to_string());
+                    // The name's extension agrees when it resolves to the same
+                    // signature family: an alias (jpeg) counts as its target
+                    // (jpg), anything else does not.
+                    let ext = std::path::Path::new(&path)
+                        .extension()
+                        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+                        .unwrap_or_default();
+                    let matches_extension = match &detected {
+                        None => false,
+                        Some(family) => {
+                            let normalized = lazarbyte_core::signatures::resolve_types(&ext)
+                                .ok()
+                                .and_then(|sigs| sigs.first().map(|s| s.name.to_string()));
+                            normalized.as_deref() == Some(family.as_str())
+                        }
+                    };
+                    IdentifyOutcome {
+                        path,
+                        detected,
+                        matches_extension,
+                    }
+                }
+                Err(_) => IdentifyOutcome {
+                    path,
+                    detected: None,
+                    matches_extension: false,
+                },
+            }
+        })
+        .collect()
+}
+
+/// What a quick look at an open image can say before a scan: its size and
+/// the filesystem family found at its start, if any. Cheap -- it reads the
+/// volume superblock, not the bytes.
+#[derive(Debug, uniffi::Record)]
+pub struct ProbeInfo {
+    pub size_bytes: u64,
+    /// `fat`/`exfat` when an FAT family superblock sits at the start.
+    pub fat_kind: Option<String>,
+    /// `ext2/3/4` when an ext superblock sits at the start.
+    pub ext_kind: Option<String>,
+}
+
+#[uniffi::export]
+impl SourceHandle {
+    /// Pre-scan probe: filesystem family and size, from superblocks only.
+    pub fn probe(&self) -> ProbeInfo {
+        let fat = lazarbyte_core::fat::locate(&self.inner, 0)
+            .ok()
+            .map(|vol| vol.kind_name().to_string());
+        // The ext volume does not carry a family field of its own; the
+        // engine reports the whole ext2/3/4 family.
+        let ext = lazarbyte_core::ext4::locate(&self.inner, 0)
+            .map(|_| "ext2/3/4".to_string())
+            .ok();
+        ProbeInfo {
+            size_bytes: self.inner.size(),
+            fat_kind: fat,
+            ext_kind: ext,
+        }
+    }
 }

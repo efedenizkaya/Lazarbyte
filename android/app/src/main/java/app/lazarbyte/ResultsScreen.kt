@@ -16,6 +16,7 @@ import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -42,6 +43,8 @@ fun ResultsScreen(
     onClear: () -> Unit,
     onVerifyAll: () -> Unit,
     verified: Map<String, Boolean>,
+    onIdentifyAll: () -> Unit,
+    identified: Map<String, uniffi.lazarbyte_ffi.IdentifyOutcome>,
 ) {
     val extensions = items.map { it.ext }.distinct().sorted()
     var filter by remember { mutableStateOf<String?>(null) }
@@ -92,6 +95,30 @@ fun ResultsScreen(
         Button(onClick = onVerifyAll, modifier = Modifier.padding(top = 4.dp)) {
             Text(if (verified.isEmpty()) "Re-verify recovered files" else "Re-verify again")
         }
+        OutlinedButton(
+            onClick = onIdentifyAll,
+            enabled = items.isNotEmpty(),
+            modifier = Modifier.padding(top = 4.dp),
+        ) {
+            Text(if (identified.isEmpty()) "Identify content types" else "Identify again")
+        }
+        identified.forEach { (path, outcome) ->
+            val name = items.firstOrNull { it.path == path }?.name ?: path
+            val line = when {
+                outcome.detected == null -> "content unrecognized"
+                outcome.matchesExtension -> "type confirmed: ${outcome.detected}"
+                else -> "content looks like ${outcome.detected}, name disagrees"
+            }
+            Text(
+                "$name: $line",
+                color = when {
+                    outcome.matchesExtension -> Color(0xFF2E7D32)
+                    outcome.detected == null -> Color(0xFF9E6400)
+                    else -> Color(0xFF9E6400)
+                },
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         verified.forEach { (path, ok) ->
             val name = items.firstOrNull { it.path == path }?.name ?: path
             Text(
@@ -121,7 +148,7 @@ fun ResultsScreen(
         }
         LazyColumn(modifier = Modifier.weight(1f)) {
             items(shown) { item ->
-                ResultRow(item, duplicates, onExport)
+                ResultRow(item, duplicates, identified[item.path], onExport)
                 HorizontalDivider()
             }
         }
@@ -135,6 +162,7 @@ fun ResultsScreen(
 private fun ResultRow(
     item: RecoveredItem,
     duplicates: Set<String>,
+    identified: uniffi.lazarbyte_ffi.IdentifyOutcome?,
     onExport: (RecoveredItem) -> Unit,
 ) {
     Row(
@@ -156,6 +184,14 @@ private fun ResultRow(
                     "byte-identical with another result",
                     style = MaterialTheme.typography.labelSmall,
                 )
+            }
+            identified?.let { outcome ->
+                val line = when {
+                    outcome.detected == null -> "content unrecognized"
+                    outcome.matchesExtension -> "content: ${outcome.detected}"
+                    else -> "content looks like ${outcome.detected}, name disagrees"
+                }
+                Text(line, style = MaterialTheme.typography.labelSmall)
             }
             Text(
                 text = item.confidence,

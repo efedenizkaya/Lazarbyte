@@ -53,6 +53,11 @@ class MainActivity : ComponentActivity() {
     /** Re-verification results: recovered path -> the hash matched. */
     private var verified by mutableStateOf<Map<String, Boolean>>(emptyMap())
 
+    /** Content-type identification: recovered path -> what the bytes say. */
+    private var identified by mutableStateOf<Map<String, uniffi.lazarbyte_ffi.IdentifyOutcome>>(
+        emptyMap()
+    )
+
     /**
      * Exporting a recovered file: the user names a destination through SAF
      * and the file's bytes are copied there. One document per export; the
@@ -80,6 +85,18 @@ class MainActivity : ComponentActivity() {
             }
             val outcomes = uniffi.lazarbyte_ffi.verifyRecovered(inputs)
             verified = outcomes.associate { it.path to it.ok }
+        }.start()
+    }
+
+    /**
+     * Content-type identification over the accumulated results: what the
+     * leading bytes say versus what the recovered name claims. A row whose
+     * bytes match no signature reports that, rather than being guessed.
+     */
+    private fun reIdentify(items: List<RecoveredItem>) {
+        Thread {
+            val outcomes = uniffi.lazarbyte_ffi.identifyFiles(items.map { it.path })
+            identified = outcomes.associateBy { it.path }
         }.start()
     }
 
@@ -191,7 +208,12 @@ class MainActivity : ComponentActivity() {
             source = handle
             pendingScanFd = servicePfd
             pickedName = uri.lastPathSegment
-            sourceInfo = "Image open: ${lastPathSegment(uri)}, ${handle.size()} bytes."
+            // A superblock peek: which filesystem family the image looks like,
+            // before any scan starts. Pure reading, a few kilobytes.
+            val probe = handle.probe()
+            val family = probe.fatKind ?: probe.extKind ?: "no filesystem at offset 0"
+            sourceInfo = "Image open: ${lastPathSegment(uri)}, ${handle.size()} bytes -- " +
+                "looks like $family."
         } catch (e: Exception) {
             sourceError = e.message ?: e.javaClass.simpleName
             return
@@ -263,9 +285,12 @@ class MainActivity : ComponentActivity() {
                             onClear = {
                                 ScanRepository.reset()
                                 verified = emptyMap()
+                                identified = emptyMap()
                             },
                             onVerifyAll = { reVerify(ScanRepository.results.value) },
                             verified = verified,
+                            onIdentifyAll = { reIdentify(ScanRepository.results.value) },
+                            identified = identified,
                         )
                     }
                 }
