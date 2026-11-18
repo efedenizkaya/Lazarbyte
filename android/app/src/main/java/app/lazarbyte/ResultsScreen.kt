@@ -49,11 +49,9 @@ fun ResultsScreen(
     val extensions = items.map { it.ext }.distinct().sorted()
     var filter by remember { mutableStateOf<String?>(null) }
     var search by remember { mutableStateOf("") }
-    val searched = if (search.isBlank()) items else items.filter {
-        it.name.contains(search.trim(), ignoreCase = true)
-    }
-    val shown = if (filter == null) searched else searched.filter { it.ext == filter }
-
+    var minSize by remember { mutableStateOf("") }
+    var dupesOnly by remember { mutableStateOf(false) }
+    val minSizeBytes = minSize.toLongOrNull() ?: 0L
     // The summary is pure arithmetic over the rows; the bridge computes it so
     // the definition of "the shape of a result" stays in Rust.
     val summary = remember(items) {
@@ -66,6 +64,12 @@ fun ResultsScreen(
         })
     }
     val duplicates = remember(summary) { summary.duplicateSha256.toSet() }
+    val searched = items.filter {
+        (search.isBlank() || it.name.contains(search.trim(), ignoreCase = true)) &&
+            it.size >= minSizeBytes &&
+            (!dupesOnly || it.sha256 in duplicates)
+    }
+    val shown = if (filter == null) searched else searched.filter { it.ext == filter }
 
     Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
         Text(
@@ -128,13 +132,34 @@ fun ResultsScreen(
             )
         }
 
-        OutlinedTextField(
-            value = search,
-            onValueChange = { search = it },
-            label = { Text("Search by name") },
-            singleLine = true,
+        Row(
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        )
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            OutlinedTextField(
+                value = search,
+                onValueChange = { search = it },
+                label = { Text("Search by name") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+            OutlinedTextField(
+                value = minSize,
+                onValueChange = { minSize = it.filter { c -> c.isDigit() } },
+                label = { Text("Min bytes") },
+                singleLine = true,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            AssistChip(
+                onClick = { dupesOnly = !dupesOnly },
+                label = { Text(if (dupesOnly) "x duplicates only" else "duplicates only") },
+            )
+        }
         LazyRow(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.padding(vertical = 8.dp),
